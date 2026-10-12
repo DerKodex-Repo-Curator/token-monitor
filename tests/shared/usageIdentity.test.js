@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { aggregateDevices, aggregateHistory, normalizeDeviceRecord, normalizePeriod, mergeDeviceRecord, mergePeriods } = require('../../src/shared/usage');
 const { normalizeUsageIdentity, packUsageIdentity } = require('../../src/shared/usageIdentity');
+const workerUsage = require('../../worker/src/shared/usage');
+const workerIdentity = require('../../worker/src/shared/usageIdentity');
 const { normalizeHistory, parseGraphResult } = require('../../src/shared/history');
 const { syncPayload, serializeSyncPayload } = require('../../src/shared/syncPayload');
 
@@ -162,11 +164,14 @@ test('event client/model buckets must match their model buckets before any dupli
     }
     for (const evidence of [raw, packUsageIdentity(raw)]) {
       const badMirror = { ...mirror, usageIdentity: evidence };
-      assert.equal(normalizeUsageIdentity(evidence, mirror), null);
-      const result = aggregateDevices([badMirror, original], 600000, Date.parse(NOW));
-      for (const period of Object.values(result.periods)) {
-        assert.deepEqual({ ...period.clientModels.claude }, { 'model-a': 200, 'model-b': 100 });
-        assert.equal(period.clientModelCosts.claude['model-b'], second.usage.costUsd);
+      for (const implementation of [{ normalizeUsageIdentity, aggregateDevices },
+        { normalizeUsageIdentity: workerIdentity.normalizeUsageIdentity, aggregateDevices: workerUsage.aggregateDevices }]) {
+        assert.equal(implementation.normalizeUsageIdentity(evidence, mirror), null);
+        const result = implementation.aggregateDevices([badMirror, original], 600000, Date.parse(NOW));
+        for (const period of Object.values(result.periods)) {
+          assert.deepEqual({ ...period.clientModels.claude }, { 'model-a': 200, 'model-b': 100 });
+          assert.equal(period.clientModelCosts.claude['model-b'], second.usage.costUsd);
+        }
       }
     }
   }
