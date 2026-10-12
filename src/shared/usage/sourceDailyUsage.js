@@ -2,7 +2,7 @@
 
 const { extractUsageFromTokscale, mergePeriods, emptyPeriod, normalizePeriod, normalizeClientName, normalizeModelNameForClient, applyProjectRollups, UNATTRIBUTED_USAGE_CLIENT } = require('../usage');
 const { isDeepStrictEqual } = require('node:util');
-const SESSION_METADATA_FIELDS = ['title', 'projectId', 'projectLabel', 'sessionKind', 'parentSessionId', 'startedAt', 'lastUsedAt',
+const SESSION_METADATA_FIELDS = ['title', 'projectId', 'projectLabel', 'sessionKind', 'nativeSessionId', 't3ThreadId', 'startedAt', 'lastUsedAt',
   'contextTokens', 'contextWindow', 'turnEnded', 'waitingForInput', 'promptCache', 'liveActivity'];
 const { legacyAllocationMatches, legacySessionAccounting, largerLegacyPeriod, rebucketSourceUsage } = require('./sourceLedger');
 const { addArchivedSession } = require('./sessionUsageArchive');
@@ -11,6 +11,11 @@ const periodCache = new WeakMap();
 function copySessionMetadata(row, prior) {
   if (!prior) return;
   for (const field of SESSION_METADATA_FIELDS) if (prior[field] !== undefined) row[field] = prior[field];
+  if (prior.parentSessionId) {
+    row.parentSessionId = prior.parentSessionId;
+    if (prior.parentClient && prior.parentClient !== row.client) row.parentClient = prior.parentClient;
+    else delete row.parentClient;
+  }
 }
 function accountingMatches(current, previous) {
   return current && previous && ['totalTokens', 'costUsd', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'models', 'modelCosts']

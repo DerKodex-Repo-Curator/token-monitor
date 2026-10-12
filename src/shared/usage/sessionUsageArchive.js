@@ -335,9 +335,16 @@ function rememberOwnedSessionMetadata(archive, session, key, capturedAt, day, mo
   if (newestSessionObservation(entry) > Date.parse(capturedAt)) return;
   const prior = entry?.periods?.allTime;
   const metadata = { client: session.client, sessionId: session.sessionId, totalTokens: 0 };
-  for (const field of ['title', 'projectId', 'projectLabel', 'sessionKind', 'parentSessionId']) {
+  for (const field of ['title', 'projectId', 'projectLabel', 'sessionKind', 'nativeSessionId', 't3ThreadId']) {
     if (session[field]) metadata[field] = session[field];
     else if (prior?.[field]) metadata[field] = prior[field];
+  }
+  // A missing parentClient on a new link means the child's own client.
+  // Never combine that link with an older cross-client namespace.
+  const relationship = session.parentSessionId ? session : prior;
+  if (relationship?.parentSessionId) {
+    metadata.parentSessionId = relationship.parentSessionId;
+    if (relationship.parentClient) metadata.parentClient = relationship.parentClient;
   }
   const next = normalizedSessionFrom(metadata, key);
   if (entry && sameJson(prior, next)) return;
@@ -591,8 +598,13 @@ function enrichSessionMetadata(session, entry, periodName) {
   if (!retained) return;
   // The daily projection owns every counter. Only fill absent descriptive
   // fields when an omitted native row could not supply its metadata.
-  for (const field of ['title', 'sessionKind']) {
+  for (const field of ['title', 'sessionKind', 'nativeSessionId', 't3ThreadId']) {
     if (!session[field] && retained[field]) session[field] = retained[field];
+  }
+  if (!session.parentSessionId && retained.parentSessionId) {
+    session.parentSessionId = retained.parentSessionId;
+    if (retained.parentClient && retained.parentClient !== session.client) session.parentClient = retained.parentClient;
+    else delete session.parentClient;
   }
   if (!session.projectId && retained.projectId) {
     session.projectId = retained.projectId;

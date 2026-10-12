@@ -39,6 +39,8 @@ Only the app, agent and packaging scripts run `ensure:tokscale`, which installs 
 
 ### Source usage retention
 
+Source-owned sessions retain native conversation and T3 thread identities as metadata without replaying counters from the generic archive. A parent session ID and its optional client namespace form one relationship; a newly observed same-client parent must not inherit an older cross-client namespace.
+
 When deleted-session retention is enabled, a full History scan requests `graph --source-snapshots`. The scanner exports priced, deduplicated observations and read evidence. The App's `sourceLedger`, stored atomically in the daily-history archive, owns accepted accounting. History and full-scan periods project that same ledger; the generic session archive supplies metadata but cannot replay counters for an owned domain. Ownership persists through failed/unsupported exports, aggregate fallback, timezone changes and restart, including old IDs whose contribution transferred or became zero.
 
 Version 2 exports timestamped contributions, opaque scanner scope/event identities, explicit session inventory and separate `readStatus` / `identityStatus`. A full-history date selection does not establish read completeness. Only complete, exactly identified scopes with their entire client selection can replace observed IDs, accept lower token/cost values or transfer event ownership. Known partial reads and unknown parser health preserve the last accepted revision. Instrumented source health validates declared accounting before native tolerant decoding can clamp or default invalid values. Strict MiMo accounting validation runs only for the opt-in export; ordinary native output and cache eligibility remain tolerant. MiMo CLI/Desktop share a scanner ownership domain; App client aliases fold only for presentation. Codex groups with explicit upstream session and turn IDs can retain identity through token corrections; rows without that evidence remain unresolved. A new scope cannot migrate overlapping legacy aggregates merely because its current totals happen to be smaller.
@@ -58,6 +60,8 @@ With source retention enabled, native periods, ledger projection and delta ancho
 Codex Dots usage merges after native/WSL scans and stays outside native delta anchors and scan partitions. Its ledger owns retention; generic usage archives must not duplicate it. Visibility changes refresh the projection without restarting observation. See [Codex](providers/codex.md#dots-local-execution) for source and lifecycle details.
 
 Claude and Codex derive prompt-cache observations in their existing provider-owned session metadata pass, alongside context and turn state. Do not add an independent transcript reader for each metric. Append scans retain cache-accounting identity so duplicate records cannot restart an estimate when the original record leaves the initial tail. In anchored watch propagation, an omitted `promptCache` leaves the prior observation alone; explicit `null` clears it.
+
+T3 title lookups bind requested native IDs as one JSON relation per store/schema, avoiding repeated scans of JSON identity fields as history grows; V2 precedence and authoritative title removals still apply across stores. This does not cache live activity or hold SQLite connections between collections.
 
 Catalog-only title updates must preserve transcript-derived activity, context, cache and attribution; subsequent transcript reads must resume normal metadata updates. Keep title provenance in local metadata caches and anchors, never in published session rows. Confirmed catalog title removals clear only the matching override and restore any native fallback; missing or unreadable stores preserve the latest known state. Full scans preserve catalog metadata independently of usage delta anchors.
 
@@ -119,6 +123,16 @@ The widget runs the collector, the usage transform (`src/shared/usage/usageTrans
 ### Balance quotas
 
 `windows[].metric === 'credits'` marks a money quota (`remaining` + `currency`). `src/shared/limits/balanceDisplay.js` is the single display entry point for Home, the tray and the limits page: key off the marker, never a provider whitelist. The top-up meter percentage is a display derivation and stays out of the wire shape.
+
+## Session relationships
+
+Native links take precedence over T3 Code's read-only, app-owned delegation evidence. The [shared reader](../src/shared/t3SessionMetadata.js) verifies provider, thread and execution-root ownership; human forks, weak identities and conflicts supply no parent link. [Accounting bindings](../src/shared/t3SessionIdentity.js) normalize Codex/Claude UUID case and match opaque ACP IDs exactly; unknown/custom executables and incompatible IDs remain unbound. Relationships read no conversation content and do not broaden title collection or sync consent.
+
+`client:sessionId` remains the accounting key. Optional `t3ThreadId` joins verified runs of one App conversation; Codex `nativeSessionId` joins verified continuation headers. `parentSessionId` and optional `parentClient` form one atomic link, with the client defaulting to the child's. Normalization, archives and sync retain these identities and reject conflicting device evidence. A missing parent creates no synthetic usage.
+
+Watch ticks resolve native identities before one T3 relationship lookup for today's members and derived copies; historical maps remain parent evidence. Native refreshes target only local rows and share accounting maps. Anchors persist confirmed identities and atomic parent links before advancing the metadata upgrade version, preserving frozen counters and `fullScanAt`. A transient T3 read failure applies no partial relationship facts and leaves the upgrade pending for the next tick or restart. Empty/missing stores complete normally; corrupt or unsupported stores do not trigger repeated historical upgrades and are reconsidered on full scans.
+
+Sessions, Home and Edge Dock share grouping before recent/running caps; Home/Dock compute group identities, totals and activity from the complete list, then project display/context fields only for selected rows and their members. Selection rechecks raw member activity at the current clock after grouping, including transcript fallback when a live lease expires. Independent conversations skip alias/parent resolution; repeated native/App identities and any parent link retain the complete grouping rules. No grouped result is cached across pushes or activity expiry. Sum each accounting member once; count distinct delegated conversations, and derive activity and token availability from all members. Context/cache snapshots remain the latest main member's own readings. Cycles and conflicting parents retain every member with distinct group identities. Sessions keeps Codex Auto Review global; Home/Dock exclude it. Grok Bot remains global. Antigravity relationships and iOS grouping are follow-ups.
 
 ## Session title display
 

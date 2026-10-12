@@ -68,6 +68,74 @@ function assertPeriods(summary, expected) {
     assert.equal(Object.values(summary[name].sessions).reduce((sum, row) => sum + row.totalTokens, 0), expected, name);
   }
 }
+
+test('ledger projection preserves main session identities and a cross-client parent through retention', () => {
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const key = `codex:${sessionId}`;
+  const metadata = { parentSessionId: 'claude-parent', parentClient: 'claude',
+    nativeSessionId: '22222222-2222-4222-8222-222222222222', t3ThreadId: 't3-child' };
+  const archive = capture({}, graph([session(sessionId, 100, 'turn', 'codex')]));
+  const projected = summary([['codex', sessionId, 100]]);
+  for (const name of ['today', 'month', 'allTime']) Object.assign(projected[name].sessions[key], metadata);
+  applySourceDailyUsage(projected, graphFromDailyHistoryArchive([], archive, options).sourceUsage, options);
+  assertPeriods(projected, 100);
+  for (const name of ['today', 'month', 'allTime']) {
+    for (const [field, value] of Object.entries(metadata)) assert.equal(projected[name].sessions[key][field], value, `${name}.${field}`);
+  }
+  const generic = roundTripGeneric(captureSessionUsageArchive({}, projected, new Date(CLOCK)));
+  assert.equal(generic.sessions[key].periods.allTime.totalTokens, 0);
+  for (const [field, value] of Object.entries(metadata)) assert.equal(generic.sessions[key].periods.allTime[field], value, field);
+  const omitted = applySessionUsageArchive(visible(archive), generic, { now: new Date(CLOCK) });
+  assertPeriods(omitted, 100);
+  for (const name of ['today', 'month', 'allTime']) {
+    for (const [field, value] of Object.entries(metadata)) assert.equal(omitted[name].sessions[key][field], value, `omitted ${name}.${field}`);
+  }
+});
+
+function roundTripGeneric(archive) { return JSON.parse(JSON.stringify(archive)); }
+
+test('the generic owned archive stores new identity metadata without counting native usage twice', () => {
+  const key = 'codex:child';
+  const native = summary([['codex', 'child', 100]]);
+  const metadata = { parentSessionId: 'parent', parentClient: 'claude',
+    nativeSessionId: '22222222-2222-4222-8222-222222222222', t3ThreadId: 't3-child' };
+  for (const name of ['today', 'month', 'allTime']) Object.assign(native[name].sessions[key], metadata);
+  native.sessionArchiveSource.ownedClients = ['codex'];
+  native.sessionArchiveSource.boundaryCheckedClients = ['codex'];
+  native.sessionArchiveSource.managedKeys = [key];
+  const archive = roundTripGeneric(captureSessionUsageArchive({}, native, new Date(CLOCK)));
+  assert.equal(archive.sessions[key].periods.allTime.totalTokens, 0);
+  for (const [field, value] of Object.entries(metadata)) assert.equal(archive.sessions[key].periods.allTime[field], value, field);
+  assertPeriods(applySessionUsageArchive(native, archive, { now: new Date(CLOCK) }), 100);
+});
+
+test('an owned session changing to a same-client parent cannot inherit an old parent namespace', () => {
+  const key = 'codex:child';
+  const archive = capture({}, graph([session('child', 100, 'turn', 'codex')]));
+  function projected(parentSessionId, parentClient) {
+    const next = summary([['codex', 'child', 100]]);
+    for (const name of ['today', 'month', 'allTime']) {
+      next[name].sessions[key].parentSessionId = parentSessionId;
+      if (parentClient) next[name].sessions[key].parentClient = parentClient;
+    }
+    applySourceDailyUsage(next, graphFromDailyHistoryArchive([], archive, options).sourceUsage, options);
+    return next;
+  }
+  const old = captureSessionUsageArchive({}, projected('old-parent', 'claude'), new Date(CLOCK));
+  const current = projected('new-parent');
+  const next = roundTripGeneric(captureSessionUsageArchive(old, current, new Date('2026-10-11T12:01:00Z')));
+  assert.equal(next.sessions[key].periods.allTime.parentSessionId, 'new-parent');
+  assert.equal(next.sessions[key].periods.allTime.parentClient, undefined);
+  assert.equal(next.sessions[key].periods.allTime.totalTokens, 0);
+  for (const candidate of [applySessionUsageArchive(current, next, { now: new Date(CLOCK) }),
+    applySessionUsageArchive(visible(archive), next, { now: new Date(CLOCK) })]) {
+    assertPeriods(candidate, 100);
+    for (const name of ['today', 'month', 'allTime']) {
+      assert.equal(candidate[name].sessions[key].parentSessionId, 'new-parent');
+      assert.equal(candidate[name].sessions[key].parentClient, undefined);
+    }
+  }
+});
 test('opaque domain ownership survives A100 -> B20, timezone, fallback, unsupported export and disk reload', t => {
   const file = temp(t);
   let archive = capture({}, graph([session('A', 100, 'shared')]));
