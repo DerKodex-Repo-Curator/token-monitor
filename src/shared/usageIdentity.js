@@ -264,6 +264,11 @@ function equal(a, b) {
   return a === b || Math.abs((a || 0) - (b || 0)) <= 8 * Number.EPSILON * MAX_EVENTS * Math.max(a || 0, b || 0);
 }
 
+function sameCounters(left, right) {
+  return [...new Set([...Object.keys(left || {}), ...Object.keys(right || {})])]
+    .every(key => equal(left?.[key], right?.[key]));
+}
+
 function normalizedPeriodClaim(raw, accepted) {
   const claim = periodCounters(raw);
   if (!equal(claim.totalTokens, claim.clients.claude) || !equal(claim.costUsd, claim.clientCosts.claude)
@@ -272,6 +277,9 @@ function normalizedPeriodClaim(raw, accepted) {
     || !equal(claim.totalTokens, total(claim.models)) || !equal(claim.costUsd, total(claim.modelCosts))
     || !equal(claim.totalTokens, total(claim.clientModels.claude))
     || !equal(claim.costUsd, total(claim.clientModelCosts.claude))) return null;
+  if (!sameCounters(claim.models, claim.clientModels.claude)
+    || !sameCounters(claim.modelCosts, claim.clientModelCosts.claude)
+    || !sameCounters(claim.modelUnpricedTokens, claim.clientModelUnpricedTokens.claude)) return null;
   for (const field of [...PERIOD_MAPS.filter(key => key.startsWith('client')), ...NESTED_MAPS]) {
     if (Object.keys(claim[field]).some(key => key !== 'claude')) return null;
   }

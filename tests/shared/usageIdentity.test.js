@@ -136,6 +136,42 @@ test('inconsistent component and foreign client attribution cannot authorize ded
   }
 });
 
+test('event client/model buckets must match their model buckets before any duplicate deduction', () => {
+  const first = { id: id(1), usage: usage(100, { model: 'model-a' }) };
+  const second = { id: id(2), usage: usage(100, { model: 'model-b' }) };
+  for (const event of [first, second]) {
+    const model = Object.keys(event.usage.models)[0];
+    Object.assign(event.usage, { unpricedTokens: 100, clientUnpricedTokens: { claude: 100 },
+      modelUnpricedTokens: { [model]: 100 }, clientModelUnpricedTokens: { claude: { [model]: 100 } } });
+  }
+  const mirror = device('host', [first, second], 'mirror');
+  const original = device('remote', [first]);
+  for (const corrupt of [
+    row => { row.clientModels.claude = { 'model-b': 100 }; },
+    row => { row.clientModelCosts.claude = { 'model-b': row.costUsd }; },
+    row => {
+      row.unpricedTokens = 100; row.clientUnpricedTokens = { claude: 100 };
+      row.modelUnpricedTokens = { 'model-a': 100 };
+      row.clientModelUnpricedTokens = { claude: { 'model-b': 100 } };
+    }
+  ]) {
+    const raw = structuredClone(normalizeUsageIdentity(mirror.usageIdentity, mirror));
+    for (const evidence of Object.values(raw.periods)) {
+      evidence.events = [structuredClone(evidence.events[0])];
+      corrupt(evidence.events[0].usage);
+    }
+    for (const evidence of [raw, packUsageIdentity(raw)]) {
+      const badMirror = { ...mirror, usageIdentity: evidence };
+      assert.equal(normalizeUsageIdentity(evidence, mirror), null);
+      const result = aggregateDevices([badMirror, original], 600000, Date.parse(NOW));
+      for (const period of Object.values(result.periods)) {
+        assert.deepEqual({ ...period.clientModels.claude }, { 'model-a': 200, 'model-b': 100 });
+        assert.equal(period.clientModelCosts.claude['model-b'], second.usage.costUsd);
+      }
+    }
+  }
+});
+
 test('an unlabeled session cannot authorize a deduction from an unrelated project', () => {
   const record = device('host', [{ id: id(1), usage: usage(100) }], 'mirror');
   for (const period of [record.today, record.month, record.allTime]) {
