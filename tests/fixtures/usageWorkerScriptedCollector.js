@@ -48,6 +48,11 @@ collector.startCollector = (options) => {
         options.onError?.(new Error('scripted failure'), reason);
         return false;
       }
+      if (reason === 'preview-only') {
+        options.onPreview?.(summary(), 'progress');
+        options.logger?.(`preview migration rows ${Object.keys(options.getSessionUsageArchive().sessions).length}`);
+        return true;
+      }
       if (reason === 'spawn') {
         // A subprocess that outlives the tick, registered the way the
         // collector's tokscale spawns are. Its end is reported as a log.

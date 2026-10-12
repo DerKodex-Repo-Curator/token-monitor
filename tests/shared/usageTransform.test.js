@@ -75,6 +75,34 @@ test('a collected summary is captured at its own collection time', () => {
   assert.equal(transform.getState().lastUpdate.failureCode, null);
 });
 
+test('preview metadata projects read-only and never captures or refreshes the archive', () => {
+  for (const external of [false, true]) {
+    const store = fakeStore();
+    const transform = createUsageTransform({ store, isExternalAgentActive: () => external,
+      readSnapshot: () => ({ version: 1, sessions: {} }) });
+    assert.equal(transform.transform(summary(), 'progress', { preview: true }).today.totalTokens, 100);
+    assert.deepEqual(store.calls, []);
+    assert.equal(transform.getState().lastUpdate.at, null);
+  }
+});
+
+test('a preview leaves released JSON migration evidence and SQLite untouched', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-preview-evidence-'));
+  const options = { databasePath: path.join(directory, 'archive.sqlite'), path: path.join(directory, 'archive.json') };
+  const { captureSessionUsageArchive } = require('../../src/shared/usage/sessionUsageArchive');
+  fs.writeFileSync(options.path, JSON.stringify(captureSessionUsageArchive({}, summary(), new Date(AT))));
+  const before = fs.readFileSync(options.path);
+  const store = createSessionUsageArchiveStore(options);
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const transform = createUsageTransform({ store, readSnapshot: () => readSessionUsageArchiveSnapshot(options) });
+  const preview = summary(20);
+  preview.updatedAt = '2026-07-10T08:15:00.000Z';
+  transform.transform(preview, 'progress', { preview: true });
+  assert.deepEqual(fs.readFileSync(options.path), before);
+  assert.equal(fs.existsSync(options.databasePath), false);
+  assert.equal(store.readMigrationEvidence().sessions['codex:c1'].periods.allTime.totalTokens, 100);
+});
+
 test('an external agent owns capture, so the transform only refreshes', () => {
   const store = fakeStore();
   const transform = createUsageTransform({ store, getSettings: () => ({}), isExternalAgentActive: () => true });

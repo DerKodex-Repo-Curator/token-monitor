@@ -4966,9 +4966,11 @@ function primeLocalStatsFromAnchor(usageOptions, widgetProducerOwner) {
       allTimeSince: usageOptions.allTimeSince,
       projectsEnabled: usageOptions.projectsEnabled,
       customScanPaths: usageOptions.customScanPaths,
+      dailyHistoryArchiveEnabled: usageOptions.dailyHistoryArchiveEnabled,
       wslScanEnabled: usageOptions.wslScanEnabled,
       wslSupported: process.platform === 'win32',
       hostname: os.hostname(),
+      sourcePlatform: process.platform,
       platform: `${process.platform}-${process.arch}`
     }
   );

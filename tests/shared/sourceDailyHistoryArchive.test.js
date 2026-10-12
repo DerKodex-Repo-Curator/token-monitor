@@ -68,17 +68,6 @@ function assertPeriods(summary, expected) {
     assert.equal(Object.values(summary[name].sessions).reduce((sum, row) => sum + row.totalTokens, 0), expected, name);
   }
 }
-function v1Archive(input = 100, { unresolved = false, state = 'present' } = {}) {
-  const observation = { client: 'claude', modelId: 'model', providerId: 'provider', tokens: input, cost: input / 100,
-    messages: 1, tokenComponentsAvailable: true };
-  const days = input ? { [TODAY]: { date: TODAY, activeTimeMs: 0, observations: { '["claude","model"]': observation } } } : {};
-  const metadata = { capturedAt: CLOCK, bucketTimezone: ZONE, dayKey: TODAY, eventIdentityVersion: 1 };
-  const entry = { client: 'claude', sessionId: 'old', ...metadata, days,
-    events: [{ id: `sha256:${'a'.repeat(64)}`, days }], sourceState: state };
-  return { version: 1, days: {}, sourceClients: ['claude'], sourceSnapshots: { claude: { ...metadata, replacementAuthority: true } },
-    sourceSessions: { 'claude:old': entry }, ...(unresolved ? { unresolvedDays: days } : {}) };
-}
-
 test('opaque domain ownership survives A100 -> B20, timezone, fallback, unsupported export and disk reload', t => {
   const file = temp(t);
   let archive = capture({}, graph([session('A', 100, 'shared')]));
@@ -274,28 +263,33 @@ test('watch new live ID receives only retained past usage while omitted IDs reta
   assert.equal(native.allTime.totalTokens, 14);
 });
 
-test('v1 retained corrected ownership remains exclusive on timezone/export loss and cannot accept fresh v1 corrections', () => {
-  const old = v1Archive(20);
-  old.sourceSessions['claude:A'] = { ...old.sourceSessions['claude:old'], sessionId: 'A', days: {}, events: [] };
-  let archive = roundTrip(old);
-  const generic = captureSessionUsageArchive({}, summary([['claude', 'A', 100]]), new Date(CLOCK));
-  const incoming = graph([session('new', 300)], '2026-10-11T12:01:00Z', { version: 1, eventIdentityVersion: 1 });
-  archive = roundTrip(capture(archive, incoming));
-  assert.equal(total(archive), 20);
-  assert.equal(Object.values(archive.sourceLedger.scopes)[0].mode, 'legacy');
-  const next = applySessionUsageArchive(visible(archive, [['claude', 'A', 100]], { timeZone: 'America/Los_Angeles' }), generic, { now: new Date(CLOCK) });
-  assertPeriods(next, 20);
+test('released days/liveDays survive normalization and disk reload without an invented ledger', t => {
+  const file = temp(t);
+  const archive = captureLiveDailyHistory({ version: 1, days: {
+    '2026-10-10': { date: '2026-10-10', observations: { old: {
+      client: 'claude', modelId: 'model', tokens: 20, cost: 0.2, messages: 1
+    } } }
+  } }, summary([['claude', 'today', 5]]).today, options);
+  writeDailyHistoryArchive(archive, file);
+  const loaded = readDailyHistoryArchive(file);
+  assert.deepEqual(loaded, roundTrip(archive));
+  assert.equal(loaded.sourceLedger, undefined);
+  assert.equal(total(loaded), 25);
+  assert.equal(loaded.days['2026-10-10'].observations['["claude","model"]'].unclassifiedTokens, 20);
+  assert.equal(loaded.liveDays[TODAY].observations['["claude","model"]'].tokens, 5);
 });
 
-test('v1 migration requires matching full exact observed session evidence before new downward authority', () => {
-  const initial = roundTrip(v1Archive(45));
-  const refused = capture(initial, graph([session('old', 15)], '2026-10-11T12:01:00Z'));
-  assert.equal(total(refused), 45);
-  assert.equal(Object.values(refused.sourceLedger.scopes)[0].mode, 'legacy');
-  const matching = capture(refused, graph([session('old', 45)], '2026-10-11T12:02:00Z'));
-  assert.equal(matching.sourceLedger.scopes['scanner-domain'].mode, 'ledger');
-  assert.equal(matching.sourceLedger.scopes['legacy:claude'], undefined);
-  assert.equal(total(capture(matching, graph([session('old', 15)], '2026-10-11T12:03:00Z'))), 15);
+test('released generic session archive cannot grant downward authority from matching IDs or totals', () => {
+  const generic = captureSessionUsageArchive({}, summary([['claude', 'old', 45]]), new Date(2026, 9, 11, 12));
+  let archive = roundTrip(capture({}, graph([session('old', 15)], '2026-10-11T12:01:00Z'), { sessionUsageArchive: generic }));
+  assert.equal(archive.sourceLedger.scopes['scanner-domain'].mode, 'legacy');
+  assert.equal(total(archive), 45);
+  for (const [input, capturedAt] of [[45, '2026-10-11T12:02:00Z'], [15, '2026-10-11T12:03:00Z']]) {
+    archive = roundTrip(capture(archive, graph([session('old', input)], capturedAt), { sessionUsageArchive: generic }));
+    assert.equal(archive.sourceLedger.scopes['scanner-domain'].mode, 'legacy');
+    assertPeriods(visible(archive), 45);
+    assert.equal(visible(archive).allTime.sessions['claude:old'].totalTokens, 45);
+  }
 });
 
 test('unresolved legacy aggregates never sum with new exact events or acquire migration from matching totals', () => {
@@ -304,7 +298,7 @@ test('unresolved legacy aggregates never sum with new exact events or acquire mi
   assert.equal(total(next), 45);
   assert.equal(next.sourceLedger.scopes['scanner-domain'].mode, 'legacy');
   assert.equal(next.sourceLedger.scopes['scanner-domain'].reason, 'unresolved-legacy-boundary');
-  const overlapping = roundTrip(v1Archive(45, { unresolved: true }));
+  const overlapping = roundTrip({ version: 1, days: {}, unresolvedDays: aggregate.days });
   const blocked = capture(overlapping, graph([session('old', 45)], '2026-10-11T12:01:00Z'));
   assert.equal(Object.values(blocked.sourceLedger.scopes)[0].mode, 'legacy');
   assert.equal(total(blocked), 45);

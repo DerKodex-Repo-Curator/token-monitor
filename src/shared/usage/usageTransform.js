@@ -104,9 +104,18 @@ function createUsageTransform(options = {}) {
     return settings.projectsEnabled === false ? visibleSummary : applyProjectRollups(visibleSummary);
   }
 
-  function transform(summary) {
+  function transform(summary, _reason, meta = {}) {
     const now = sessionUsageArchiveDate(summary);
     if (getSettings()?.sessionUsageArchiveEnabled === false) return project(summary, null, now);
+    // A progressive scan has not established source ownership yet. Persisting
+    // its counters would make the later migration read its own preview as legacy.
+    if (meta.preview === true) {
+      // Loading the writer store can itself migrate/prune released data. Use
+      // its display snapshot without altering persistent migration evidence.
+      let snapshot;
+      try { snapshot = readSnapshot(); } catch (_) { snapshot = normalizeSessionUsageArchive({}); }
+      return project(summary, snapshot, now);
+    }
     if (isExternalAgentActive()) {
       try {
         sessionArchive = store.refresh(now);

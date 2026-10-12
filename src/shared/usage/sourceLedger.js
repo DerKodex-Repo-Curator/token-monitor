@@ -217,8 +217,7 @@ function normalizeSourceLedger(value) {
       next.sessions[key] = { client: row.client, sessionId: row.sessionId,
         sourceState: row.sourceState === 'present' ? 'present' : row.sourceState === 'missing' && sourcePath ? 'missing' : 'unknown',
         ...(sourcePath ? { sourcePath } : {}),
-        ...(timestamp(row.sourceObservedAt) ? { sourceObservedAt: row.sourceObservedAt } : {}),
-        ...(scope.mode === 'legacy' && row.days ? { days: row.days } : {}) };
+        ...(timestamp(row.sourceObservedAt) ? { sourceObservedAt: row.sourceObservedAt } : {}) };
     }
     for (const [uid, event] of Object.entries(scope.events)) {
       const rows = Array.isArray(event?.contributions) ? event.contributions.map(contribution) : null;
@@ -230,33 +229,6 @@ function normalizeSourceLedger(value) {
     ledger.scopes[id] = next;
   }
   return markCanonical(ledger);
-}
-
-// v1 is frozen accounting, never new replacement evidence. Keep its accepted
-// session counters exclusive even when the last projection was unavailable.
-function ledgerFromLegacyArchive(archive, options = {}) {
-  const ledger = normalizeSourceLedger(undefined);
-  const clients = new Set([...Object.keys(archive.sourceSnapshots || {}),
-    ...Object.values(archive.sourceSessions || {}).map(row => row.client), ...(archive.sourceClients || [])]);
-  for (const client of clients) {
-    if (!rawClient(client)) continue;
-    const snapshot = archive.sourceSnapshots?.[client];
-    const rows = Object.entries(archive.sourceSessions || {}).filter(([, row]) => row.client === client);
-    const scope = { mode: 'legacy', clients: [client], sessions: {}, events: {}, blockNativeWatch: true, reason: 'v1-retained-accounting',
-      ...(timestamp(snapshot?.capturedAt) ? { acceptedAt: snapshot.capturedAt } : {}),
-      ...(timestamp(snapshot?.observationFrontier) ? { observationFrontier: snapshot.observationFrontier } : {}) };
-    for (const [key, row] of rows) scope.sessions[key] = { client, sessionId: row.sessionId, days: row.days,
-      sourceState: row.sourceState, ...(row.sourcePath ? { sourcePath: row.sourcePath } : {}),
-      ...(row.sourceObservedAt ? { sourceObservedAt: row.sourceObservedAt } : {}) };
-    const unresolved = options.legacyBoundary?.([client], null);
-    if (unresolved?.hasUsage) scope.unresolvedBoundary = true;
-    if (!rows.length) {
-      scope.legacyDays = snapshot?.fallbackDays || unresolved?.days || {};
-      scope.unresolvedBoundary = true;
-    }
-    ledger.scopes[`legacy:${client}`] = scope;
-  }
-  return ledger;
 }
 
 function scansFromGraphs(graphs) {
@@ -317,29 +289,6 @@ function frontier(scope) {
 function hasUsage(days) {
   return Object.values(days || {}).some(day => Object.values(day.observations || {}).some(row => row.tokens || row.cost || row.messages));
 }
-function rowDays(scope, key, timeZone) {
-  const row = scope.sessions[key];
-  if (scope.mode === 'legacy') return Object.values(row.days || {}).map(day => ({ date: day.date, clients: Object.values(day.observations || {}).map(value => ({
-    client: row.client, modelId: value.modelId, providerId: value.providerId || '',
-    tokens: { input: Math.max(0, value.tokens - (value.outputTokens || 0) - (value.cacheReadTokens || 0) - (value.cacheWriteTokens || 0)),
-      output: value.outputTokens || 0, cacheRead: value.cacheReadTokens || 0, cacheWrite: value.cacheWriteTokens || 0, reasoning: 0 },
-    cost: value.cost, messages: value.messages, tokenComponentsAvailable: value.tokenComponentsAvailable === true,
-    ...(value.unclassifiedTokens ? { unclassifiedTokens: value.unclassifiedTokens } : {})
-  })) }));
-  const days = new Map();
-  for (const event of Object.values(scope.events)) {
-    if (event.ownerKey !== key) continue;
-    for (const value of event.contributions) {
-      const date = dayKey(value.timestamp, timeZone);
-      const day = days.get(date) || { date, clients: [] };
-      day.clients.push({ client: row.client, modelId: value.modelId, providerId: value.providerId,
-        tokens: value.tokens, cost: value.cost, messages: value.messages });
-      days.set(date, day);
-    }
-  }
-  return [...days.values()];
-}
-
 function scopeDays(scope, timeZone) {
   const owners = new Map();
   for (const event of Object.values(scope.events)) {
@@ -357,16 +306,9 @@ function scopeDays(scope, timeZone) {
   return owners;
 }
 
-function migrationMatches(scope, scan, options) {
-  if (scope.unresolvedBoundary || hasUsage(scope.legacyDays)) return false;
-  if (scope.clients.some(client => !scan.clients.includes(client))) return false;
-  const incoming = { mode: 'ledger', sessions: scan.sessions, events: scan.events };
-  const incomingDays = scopeDays(incoming, options.timeZone);
-  for (const [key, row] of Object.entries(scope.sessions)) {
-    if (!hasUsage(row.days)) continue;
-    if (!scan.sessions[key] || !options.matchLegacySession?.(row.days, [...(incomingDays.get(key)?.values() || [])])) return false;
-  }
-  return true;
+function migrationMatches(scope, scan) {
+  return !scope.unresolvedBoundary && !hasUsage(scope.legacyDays)
+    && scope.clients.every(client => scan.clients.includes(client));
 }
 
 function captureSourceLedger(value, graphs, options = {}) {
@@ -394,6 +336,7 @@ function captureSourceLedger(value, graphs, options = {}) {
       rejectedGraphs.add(scan.graph); scan.clients.forEach(client => rejectedClients.add(client)); continue;
     }
     let reason = scan.reason;
+    if (options.nativeRawClients === null) reason ||= 'native-accounting-unavailable';
     const observedClients = new Set([...(options.nativeRawClients || []),
       ...(Array.isArray(scan.graph.contributions) ? scan.graph.contributions : [])
         .flatMap(day => (Array.isArray(day?.clients) ? day.clients : []).map(row => row?.client)).filter(rawClient)]);
@@ -412,7 +355,7 @@ function captureSourceLedger(value, graphs, options = {}) {
     if (previous?.mode === 'ledger' && previous.proof.retainedBoundaryChecked !== true && boundary?.hasRetainedUsage) {
       reason ||= 'unresolved-legacy-boundary';
     }
-    if (!reason && legacy.some(([, scope]) => !migrationMatches(scope, scan, options))) reason = 'unresolved-legacy-boundary';
+    if (!reason && legacy.some(([, scope]) => !migrationMatches(scope, scan))) reason = 'unresolved-legacy-boundary';
     if (previous?.acceptedAt === scan.capturedAt && previous.mode === 'ledger') {
       const same = Object.keys(scan.sessions).every(key => previous.sessions[key])
         && Object.entries(scan.events).every(([uid, event]) => isDeepStrictEqual(previous.events[uid], event))
@@ -531,7 +474,7 @@ function projectSourceLedger(value, options = {}) {
     for (const [key, row] of Object.entries(scope.sessions)) {
       managedKeys.add(key);
       sessions.push({ client: row.client, sessionId: row.sessionId, scopeId: id, mode: scope.mode,
-        sourceState: row.sourceState, days: daysByOwner ? [...(daysByOwner.get(key)?.values() || [])] : rowDays(scope, key, timeZone) });
+        sourceState: row.sourceState, days: daysByOwner ? [...(daysByOwner.get(key)?.values() || [])] : [] });
     }
     if (scope.legacyDays) aggregates.push(...Object.values(scope.legacyDays).map(day => ({ ...day, scopeId: id })));
     if (scope.legacyPeriods) retainedPeriods.push({ scopeId: id, clients: scope.clients, periods: scope.legacyPeriods });
@@ -548,4 +491,4 @@ function rebucketSourceUsage(projection, timeZone) {
   return ledger ? projectSourceLedger(ledger, { timeZone }) : projection;
 }
 
-module.exports = { legacyCostsEqual, legacyDaysMatch, legacyAllocationMatches, legacySessionAccounting, selectLegacyDay, largerLegacyPeriod, rebucketSourceUsage, captureSourceLedger, ledgerFromLegacyArchive, normalizeSourceLedger, projectSourceLedger, sourceSnapshotsFromGraphs };
+module.exports = { legacyCostsEqual, legacyDaysMatch, legacyAllocationMatches, legacySessionAccounting, selectLegacyDay, largerLegacyPeriod, rebucketSourceUsage, captureSourceLedger, normalizeSourceLedger, projectSourceLedger, sourceSnapshotsFromGraphs };

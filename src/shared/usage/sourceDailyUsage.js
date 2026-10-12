@@ -1,6 +1,6 @@
 'use strict';
 
-const { extractUsageFromTokscale, mergePeriods, emptyPeriod, normalizePeriod, normalizeClientName, normalizeModelNameForClient, applyProjectRollups } = require('../usage');
+const { extractUsageFromTokscale, mergePeriods, emptyPeriod, normalizePeriod, normalizeClientName, normalizeModelNameForClient, applyProjectRollups, UNATTRIBUTED_USAGE_CLIENT } = require('../usage');
 const { isDeepStrictEqual } = require('node:util');
 const SESSION_METADATA_FIELDS = ['title', 'projectId', 'projectLabel', 'sessionKind', 'parentSessionId', 'startedAt', 'lastUsedAt',
   'contextTokens', 'contextWindow', 'turnEnded', 'waitingForInput', 'promptCache', 'liveActivity'];
@@ -169,7 +169,7 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
       // inferred additive union. Undated allTime never creates a daily bucket.
       let selectedPeriod = largerLegacyPeriod({ period: allocated }, { period }, 'allTime') ? allocated : period;
       if (!full && boundary.clients.some(client => nativeLegacyRaw.has(client))) {
-        const candidate = mergePeriods(...onlyClients(summary[name], boundaryOwners));
+        const candidate = mergePeriods(...onlyClients(native, boundaryOwners));
         if (largerLegacyPeriod({ period: candidate }, { period: selectedPeriod }, 'allTime')) selectedPeriod = candidate;
       }
       for (const [key, row] of Object.entries(selectedPeriod.sessions)) {
@@ -211,10 +211,10 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
       const partitions = options.nativePartitions?.[name];
       const untouched = rawPartitions
         ? Object.entries(rawPartitions).filter(([raw]) => !owners.has(normalizeClientName(raw))).map(([, period]) => period)
-        : partitions ? Object.entries(partitions).filter(([client]) => !owners.has(client)).map(([, period]) => period)
+        : partitions ? Object.entries(partitions).filter(([client]) => !owners.has(client) && client !== UNATTRIBUTED_USAGE_CLIENT).map(([, period]) => period)
           : Object.entries(native.sessions || {}).filter(([, row]) => !owners.has(row.client)).length === 0
             && Object.keys(native.clients || {}).every(client => owners.has(client)) ? []
-            : fallbackUntouched(native, owners);
+            : fallbackUntouched(native, new Set([...owners, UNATTRIBUTED_USAGE_CLIENT]));
       const acceptedRaw = Object.fromEntries([...rawOwners].map(raw => {
         const period = nativeLegacyRaw.has(raw)
           ? structuredClone(rawPartitions ? rawPartitions[raw] || emptyPeriod()
@@ -246,10 +246,13 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
       summary[name] = mergePeriods(displayNative, ...retained, aggregate, options.supplementalPeriods?.[name] || emptyPeriod());
     } else {
       const replacedOwners = new Set([...lockedOwners, ...legacyPeriodOwners]);
-      const base = replacedOwners.size ? mergePeriods(...fallbackUntouched(summary[name], replacedOwners)) : summary[name];
+      // An unattributed observation can overlap every owned domain. It cannot
+      // be added to retained accepted counters as if it were another source.
+      if (replacedOwners.size) replacedOwners.add(UNATTRIBUTED_USAGE_CLIENT);
+      const base = replacedOwners.size ? mergePeriods(...fallbackUntouched(native, replacedOwners)) : native;
       const aggregate = aggregatePeriod((sourceUsage.aggregates || []).filter(day => !legacyPeriodScopes.has(day.scopeId)
         && (sourceUsage.scopes || []).some(scope => scope.id === day.scopeId && scope.blockNativeWatch)), name, today, since);
-      summary[name] = mergePeriods(base, ...observed.map(row => row.period), ...retained, aggregate);
+      summary[name] = mergePeriods(base, ...observed.map(row => row.period), ...retained, aggregate, options.supplementalPeriods?.[name] || emptyPeriod());
     }
   }
   if (full) applyProjectRollups(summary);

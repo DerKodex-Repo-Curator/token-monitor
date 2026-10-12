@@ -7,6 +7,9 @@ process.env.TZ = 'Asia/Shanghai';
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { deviceRecordFromAnchor } = require('../../src/shared/anchorSeed');
 const { configFingerprint } = require('../../src/shared/collector');
@@ -74,6 +77,30 @@ test('a matching anchor seeds a full device record', () => {
   assert.equal(Object.prototype.hasOwnProperty.call(record, 'wslStatus'), false);
 });
 
+test('a Windows cold-start seed reads APPDATA settings without changing its record platform', t => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anchor-seed-platform-'));
+  t.after(() => fs.rmSync(homeDir, { recursive: true, force: true }));
+  const env = { APPDATA: path.join(homeDir, 'roaming') };
+  const configDir = path.join(env.APPDATA, 'tokscale');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ scanner: { bucketTimezone: 'America/Los_Angeles' } }));
+  const options = seedOptions({ homeDir, env, now: new Date('2026-10-12T04:00Z'),
+    dailyHistoryArchiveEnabled: true, pricingRevision: 'fixed' });
+  const saved = anchorFixture({ dateKey: '2026-10-11', timeZone: 'America/Los_Angeles',
+    fullScanAt: '2026-10-12T03:00Z', configFingerprint: configFingerprint(CLIENTS, ALL_TIME_SINCE, true, '', '', null, 'fixed') });
+  assert.ok(deviceRecordFromAnchor(saved, { ...options, platform: 'win32' }));
+  for (const platform of ['win32-x64', 'win32-arm64']) {
+    const record = deviceRecordFromAnchor(saved, { ...options, platform });
+    assert.ok(record, platform);
+    assert.equal(record.platform, platform);
+    assert.equal(record.periodWindows.timeZone, saved.timeZone);
+    assert.equal(record.today.totalTokens, 1000);
+  }
+  const explicit = deviceRecordFromAnchor(saved, { ...options, platform: 'custom-record-label', sourcePlatform: 'win32' });
+  assert.ok(explicit);
+  assert.equal(explicit.platform, 'custom-record-label');
+});
+
 test('WSL status follows the platform and the toggle, the way a collected record does', () => {
   const wslStatus = { state: 'active', detected: ['claude'], withData: ['claude'] };
 
@@ -107,15 +134,19 @@ test('the seed reports the project setting it was built under', () => {
 
 test('the cold-start seed accepts an anchor configured for Qoder CN', () => {
   const homeDir = '/tmp/token-monitor-qodercn-home';
-  const cnPaths = qoderCnDataPaths({ homeDir });
   const clients = 'claude,qodercn';
-  const anchor = anchorFixture({
-    configFingerprint: configFingerprint(clients, ALL_TIME_SINCE, true, cnPaths.dbPaths[0], cnPaths.projectsDir)
-  });
-
-  const record = deviceRecordFromAnchor(anchor, seedOptions({ clients, homeDir }));
-  assert.equal(record.today.totalTokens, 1_000);
-  assert.deepEqual(record.trackedClients, ['claude', 'qodercn']);
+  for (const sourcePlatform of ['darwin', 'linux', 'win32']) {
+    const env = {};
+    const cnPaths = qoderCnDataPaths({ homeDir, env, platform: sourcePlatform });
+    const anchor = anchorFixture({
+      configFingerprint: configFingerprint(clients, ALL_TIME_SINCE, true, cnPaths.dbPaths[0], cnPaths.projectsDir)
+    });
+    const record = deviceRecordFromAnchor(anchor, seedOptions({ clients, homeDir, env, sourcePlatform }));
+    assert.ok(record, sourcePlatform);
+    assert.equal(record.today.totalTokens, 1_000);
+    assert.deepEqual(record.trackedClients, ['claude', 'qodercn']);
+    assert.equal(record.platform, 'darwin-arm64');
+  }
 });
 
 test('the seed refuses a Qoder CN anchor that predates the JSONL source', () => {
@@ -123,12 +154,15 @@ test('the seed refuses a Qoder CN anchor that predates the JSONL source', () => 
   // month/allTime from before the storage migration while only today's JSONL
   // is scanned. The projects dir must be part of the trusted fingerprint.
   const homeDir = '/tmp/token-monitor-qodercn-home';
-  const cnPaths = qoderCnDataPaths({ homeDir });
   const clients = 'claude,qodercn';
-  const legacyAnchor = anchorFixture({
-    configFingerprint: configFingerprint(clients, ALL_TIME_SINCE, true, cnPaths.dbPaths[0])
-  });
-  assert.equal(deviceRecordFromAnchor(legacyAnchor, seedOptions({ clients, homeDir })), null);
+  for (const sourcePlatform of ['darwin', 'linux', 'win32']) {
+    const env = {};
+    const cnPaths = qoderCnDataPaths({ homeDir, env, platform: sourcePlatform });
+    const legacyAnchor = anchorFixture({
+      configFingerprint: configFingerprint(clients, ALL_TIME_SINCE, true, cnPaths.dbPaths[0])
+    });
+    assert.equal(deviceRecordFromAnchor(legacyAnchor, seedOptions({ clients, homeDir, env, sourcePlatform })), null, sourcePlatform);
+  }
 });
 
 test('the seed carries local-only native Reasonix views when the anchor has them', () => {

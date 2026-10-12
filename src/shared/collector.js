@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { customPricingPath } = require('./tokscaleConfig');
+const { customPricingPath, tokscaleConfigDir } = require('./tokscaleConfig');
 const { abortReason, throwIfAborted } = require('./abortSignal');
 const { readJson, sharedDataDir } = require('./config');
 const { appVersion } = require('./appVersion');
@@ -37,6 +37,7 @@ const { activityWatchSources, activityClientsForPath, activityWatchIgnored } = r
 const { localDayKey, parseGraphResult, normalizeHistory, mergeHistories } = require('./history');
 const { retainDailyHistory, retainLiveDailyHistory, captureLiveDailyHistory, sourceSnapshotsFromGraphs, readDailyHistoryArchive, graphFromDailyHistoryArchive } = require('./dailyHistoryArchive');
 const { applySourceDailyUsage } = require('./usage/sourceDailyUsage');
+const { legacyCostsEqual } = require('./usage/sourceLedger');
 const { readSessionUsageArchiveEvidence } = require('./usage/sessionUsageArchiveStore');
 const {
   createSubprocessTermination,
@@ -550,7 +551,8 @@ function rawTokscalePartitions(json, period) {
   }
   const partitions = Object.fromEntries([...rows].map(([client, entries]) => [client, extractUsageBundleFromTokscale({ entries }).period]));
   const combined = mergePeriods(...Object.values(partitions));
-  if (!['totalTokens', 'costUsd', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'].every(field => Math.abs(combined[field] - period[field]) < 1e-9)) return null;
+  if (!['totalTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'].every(field => combined[field] === period[field])
+    || !legacyCostsEqual(combined.costUsd, period.costUsd, json.entries.length)) return null;
   return partitions;
 }
 
@@ -662,11 +664,64 @@ function lookupModelPricing(modelId, commandTimeoutMs = 15000) {
   return spawnTokscaleJson(['pricing', id, '--json', '--no-spinner'], commandTimeoutMs);
 }
 
-// The collector's stamp and history.js's window/streak boundary have to be the same
-// calendar day or the aggregate re-keys what the collector wrote, so there is one
-// implementation rather than two formatters free to drift. Kept under the collector's
-// own name: it is exported and reads as the stamping side at its call sites.
-const localTodayKey = localDayKey;
+// Host-local remains the default. Source retention uses the scanner's pinned
+// calendar for both native deltas and ledger projection.
+const bucketDateFormatters = new Map();
+function localTodayKey(now = new Date(), timeZone) {
+  if (!timeZone) return localDayKey(now);
+  let formatter = bucketDateFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    bucketDateFormatters.set(timeZone, formatter);
+  }
+  const parts = Object.fromEntries(formatter.formatToParts(now).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+// Read the same configured calendar as the native --today/--month scans. This
+// is a window choice, not source completeness or migration authority.
+function collectorTimeZone(options = {}) {
+  const hostZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!options.dailyHistoryArchiveEnabled) return hostZone;
+  const settingsPath = path.join(tokscaleConfigDir(options), 'settings.json');
+  let content;
+  try {
+    content = fs.readFileSync(settingsPath, 'utf8');
+  } catch (_) {
+    // Match Tokscale's read fallback, including unreadable primary files.
+    // Readable malformed JSON and an explicit override never enable it.
+    if ((options.platform || process.platform) === 'darwin' && !(options.env || process.env).TOKSCALE_CONFIG_DIR) {
+      try {
+        content = fs.readFileSync(path.join(options.homeDir || os.homedir(), 'Library/Application Support/tokscale/settings.json'), 'utf8');
+      } catch (_) { /* neither settings location could be read */ }
+    }
+  }
+  let settings;
+  try { settings = JSON.parse(content); } catch (_) { /* native settings also default after a parse failure */ }
+  const configuredZone = settings?.scanner?.bucketTimezone;
+  const zone = typeof configuredZone === 'string' ? configuredZone.trim() : '';
+  try {
+    if (zone) {
+      new Intl.DateTimeFormat('en', { timeZone: zone }).format(0);
+      return zone;
+    }
+  } catch (_) { /* native scans also fall back to host-local for an invalid pin */ }
+  return hostZone;
+}
+
+// Find the first instant of a named bucket day. Searching dates rather than
+// assuming a 24-hour day covers DST and zones whose midnight changes offset.
+function bucketDayStart(year, month, day, timeZone) {
+  const target = new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+  const center = Date.UTC(year, month, day);
+  let low = center - 36 * 60 * 60 * 1000, high = center + 36 * 60 * 60 * 1000;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (localTodayKey(new Date(middle), timeZone) < target) low = middle;
+    else high = middle;
+  }
+  return new Date(high);
+}
 
 function collectionDate(now) {
   const value = typeof now === 'function' ? now() : now;
@@ -677,11 +732,17 @@ function collectionDate(now) {
 // (next local midnight / next month start, in this device's timezone). The hub
 // uses these to expire a frozen snapshot once it goes offline past a day/month
 // boundary, instead of counting stale "today" data forever (issue #37).
-function computePeriodWindows(now = new Date()) {
+function computePeriodWindows(now = new Date(), timeZone) {
+  if (timeZone && timeZone !== Intl.DateTimeFormat().resolvedOptions().timeZone) {
+    const key = localTodayKey(now, timeZone);
+    const [year, month, day] = key.split('-').map(Number);
+    return { timeZone, today: { key, endsAt: bucketDayStart(year, month - 1, day + 1, timeZone).toISOString() },
+      month: { key: key.slice(0, 7), endsAt: bucketDayStart(year, month, 1, timeZone).toISOString() } };
+  }
   const startOfNextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
   const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  let timeZone = '';
+  timeZone = '';
   try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
   return {
     ...(timeZone ? { timeZone } : {}),
@@ -690,8 +751,8 @@ function computePeriodWindows(now = new Date()) {
   };
 }
 
-function timezoneFingerprint(now = new Date()) {
-  return JSON.stringify([computePeriodWindows(now).timeZone || '', now.getTimezoneOffset()]);
+function timezoneFingerprint(now = new Date(), options = {}) {
+  return JSON.stringify([collectorTimeZone(options), now.getTimezoneOffset()]);
 }
 
 // Copy freshly decorated identities/timestamps from `today` onto the same session
@@ -887,6 +948,7 @@ async function collectHistoryOnce(options) {
         pricingRevision: options.pricingRevision,
         customPricingActive: options.customPricingActive,
         todayKey,
+        timeZone: options.timeZone,
         capDays,
         sourcePaths: options.sourcePaths,
         writeEnabled: options.dailyHistoryArchiveWriteEnabled
@@ -923,6 +985,8 @@ async function collectUsageOnce(options) {
   // straddles local midnight cannot pair a day-N today scan with a day-N+1
   // window (issue #37 follow-up). Injectable for tests.
   const collectedAt = collectionDate(options.now);
+  const timeZone = collectorTimeZone(options);
+  const todayKey = localTodayKey(collectedAt, timeZone);
   const reportTerminationUnconfirmed = (operation) => {
     try {
       options.onDiagnosticEvent?.({
@@ -1007,7 +1071,8 @@ async function collectUsageOnce(options) {
   const anchor = options.todayOnlyAnchor;
   const anchorUsed = Boolean(
     anchor
-    && anchor.dateKey === localTodayKey(collectedAt)
+    && (anchor.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone) === timeZone
+    && anchor.dateKey === todayKey
     && canTargetTodayPartitions(anchor, targetClients)
   );
   // Full-scan rows are native, even when their title matches an old override.
@@ -1238,7 +1303,7 @@ async function collectUsageOnce(options) {
         ...(options.dailyHistoryArchiveOptions || {}),
         sourceProjection: options.sourceArchiveSnapshot,
         liveDays: dailyHistoryLiveDays,
-        todayKey: localTodayKey(collectedAt),
+        todayKey,
         pricingRevision: options.pricingRevision,
         writeEnabled: options.dailyHistoryArchiveWriteEnabled
       };
@@ -1334,7 +1399,7 @@ async function collectUsageOnce(options) {
     trackedClients: normalizedClients ? normalizedClients.split(',') : [],
     clientStatus: deriveClientStatus(normalizedClients, allTime, { sourceChecks }),
     wslStatus,
-    periodWindows: computePeriodWindows(collectedAt),
+    periodWindows: computePeriodWindows(collectedAt, timeZone),
     historyAvailable: options.historyEnabled !== false,
     today,
     month,
@@ -1392,6 +1457,8 @@ async function collectUsageOnce(options) {
     }
     options.onAnchorComputed({
       windowsPeriods,
+      timeZone,
+      dateKey: todayKey,
       todayPartitions,
       nativeRawPresence,
       t3Titles,
@@ -1414,7 +1481,8 @@ async function collectUsageOnce(options) {
       historyEnabled: options.historyEnabled,
       commandTimeoutMs: options.historyTimeoutMs,
       capDays: options.historyCapDays,
-      todayKey: localTodayKey(collectedAt),
+      todayKey,
+      timeZone,
       runGraph: runGraphFn,
       signal: options.signal,
       dailyHistoryArchiveEnabled: options.dailyHistoryArchiveEnabled,
@@ -1424,7 +1492,10 @@ async function collectUsageOnce(options) {
       getSessionUsageArchive: options.getSessionUsageArchive,
       sessionUsageArchive: options.sessionUsageArchive,
       sessionUsageArchiveOptions: options.sessionUsageArchiveOptions,
-      nativeRawClients: [...new Set(Object.values(nativeRawPartitions).flatMap(partitions => Object.keys(partitions)))],
+      // Unavailable raw attribution is unknown inventory, not a proved empty
+      // scan. Preserve that distinction for first ownership and corrections.
+      nativeRawClients: Object.values(nativeRawPartitions).some(partitions => partitions === null) ? null
+        : [...new Set(Object.values(nativeRawPartitions).flatMap(partitions => Object.keys(partitions)))],
       nativePeriods: windowsPeriods,
       sourcePaths,
       onSourceUsage: (sourceUsage) => {
@@ -1435,7 +1506,7 @@ async function collectUsageOnce(options) {
         // The App ledger decides acceptance and owns the retained counters.
         // Scanner metadata supplies inventory, never a second authority vote.
         applySourceDailyUsage(summary, sourceUsage, {
-          todayKey: localTodayKey(collectedAt), allTimeSince,
+          todayKey, timeZone, allTimeSince,
           replaceLive: !anchorUsed, nativePartitions, nativeRawPartitions, nativeRawPresence, nativePeriods: windowsPeriods,
           nativeAnchor: anchorUsed ? anchor : null, clients: normalizedClients,
           supplementalPeriods: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
@@ -1466,13 +1537,18 @@ async function collectUsageOnce(options) {
   if (options.dailyHistoryArchiveEnabled && !options.includeHistory) {
     try {
       const sourceUsage = options.sourceArchiveSnapshot
-        || graphFromDailyHistoryArchive([], readDailyHistoryArchive(options.dailyHistoryArchiveOptions || {})).sourceUsage
+        || graphFromDailyHistoryArchive([], readDailyHistoryArchive(options.dailyHistoryArchiveOptions || {}), { timeZone }).sourceUsage
         || { version: 2, accountingOwner: 'app', ownedClients: [], managedKeys: [], sessions: [] };
       options.onSourceArchiveComputed?.(sourceUsage);
       applySourceDailyUsage(summary, sourceUsage, {
-        todayKey: localTodayKey(collectedAt), allTimeSince, clients: normalizedClients,
-        nativePeriods: windowsPeriods, nativeRawPresence, nativeAnchor: anchorUsed ? anchor : null
+        todayKey, timeZone, allTimeSince, clients: normalizedClients,
+        nativePeriods: windowsPeriods, nativePartitions, nativeRawPartitions, nativeRawPresence, nativeAnchor: anchorUsed ? anchor : null,
+        supplementalPeriods: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
+          mergePeriods(wslBundle[name], codexLocalView?.[name] || emptyPeriod())]))
       });
+      today = summary.today;
+      month = summary.month;
+      allTime = summary.allTime;
     } catch (error) {
       options.logger?.(`daily source archive read failed: ${error.message}`);
     }
@@ -1487,7 +1563,7 @@ async function collectUsageOnce(options) {
       options.lastActivityDays,
       summary.history,
       today,
-      localTodayKey(collectedAt)
+      todayKey
     )
   });
   if (clientHealth) summary.clientHealth = clientHealth;
@@ -2337,7 +2413,9 @@ function qoderCnProjectsDirForClients(clientsCsv, options = {}) {
 // a seed has nothing to stand on and declines.
 function collectorAnchorTrust(saved, options = {}) {
   const { clients = '', allTimeSince = '', projectsEnabled = true, qoderCnDbPath = '', qoderCnProjectsDir = '', customScanPaths = null, now = new Date() } = options;
-  if (!saved || saved.dateKey !== localTodayKey(now)) return null;
+  const timeZone = collectorTimeZone(options);
+  if (!saved || saved.dateKey !== localTodayKey(now, timeZone)) return null;
+  if ((saved.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone) !== timeZone) return null;
   if (!saved.today || !saved.month || !saved.allTime) return null;
   // A flat provenance ledger cannot prove each period's project source.
   if (Object.keys(saved.catalogProjects || {}).length && !saved.catalogProjects.today) return null;
@@ -2664,7 +2742,7 @@ function startCollector(options) {
   // between full ticks (WSL is not scanned on watch ticks).
   let anchor = null;
   let sourceArchiveSnapshot = null;
-  let timezoneRevision = timezoneFingerprint(collectionDate(options.now));
+  let timezoneRevision = timezoneFingerprint(collectionDate(options.now), options);
   let wslAnchor = null;
   let wslStatusAnchor = null;
   // The last-activity days a history refresh produced, carried across the ticks
@@ -2796,7 +2874,9 @@ function startCollector(options) {
         qoderCnDbPath,
         qoderCnProjectsDir,
         customScanPaths: options.customScanPaths,
-        pricingRevision
+        pricingRevision,
+        dailyHistoryArchiveEnabled: options.dailyHistoryArchiveEnabled,
+        homeDir: options.homeDir, env: options.env
       });
       // Older anchors collapsed raw source aliases into canonical session keys.
       // Rebuild once before reusing them with source retention, so an omitted
@@ -2804,6 +2884,7 @@ function startCollector(options) {
       if (trust && (!options.dailyHistoryArchiveEnabled || saved.nativeRawPresence)) {
         anchor = {
           dateKey: saved.dateKey,
+          timeZone: saved.timeZone,
           today: saved.today,
           month: saved.month,
           allTime: saved.allTime,
@@ -2836,6 +2917,7 @@ function startCollector(options) {
       fs.mkdirSync(path.dirname(anchorPath), { recursive: true });
       fs.writeFileSync(anchorPath, JSON.stringify({
         dateKey: anchor.dateKey,
+        timeZone: anchor.timeZone,
         cursorAutoModelVersion: 1,
         today: anchor.today,
         month: anchor.month,
@@ -2892,11 +2974,12 @@ function startCollector(options) {
     const visibilityRevision = codexVisibilityRevision;
     const tickStartedAt = Date.now();
     const collectedAt = collectionDate(options.now);
-    const todayKey = localTodayKey(collectedAt);
+    const timeZone = collectorTimeZone(options);
+    const todayKey = localTodayKey(collectedAt, timeZone);
     const tickPricingRevision = pricingFingerprint(options);
     const sessionMetadataFallback = anchor;
     const pricingChanged = tickPricingRevision !== pricingRevision;
-    const tickTimezoneRevision = timezoneFingerprint(collectedAt);
+    const tickTimezoneRevision = timezoneFingerprint(collectedAt, options);
     const timezoneChanged = tickTimezoneRevision !== timezoneRevision;
     if (pricingChanged || timezoneChanged) {
       anchor = null;
@@ -3067,7 +3150,7 @@ function startCollector(options) {
       // A settings save can land between the serial period scans. Discard that
       // mixed result and replay all windows against one pricing revision.
       if (pricingFingerprint(options) !== tickPricingRevision
-        || timezoneFingerprint(collectionDate(options.now)) !== tickTimezoneRevision) {
+        || timezoneFingerprint(collectionDate(options.now), options) !== tickTimezoneRevision) {
         return pricingChangedDuringScan;
       }
       if (includeHistory) {
@@ -3081,7 +3164,8 @@ function startCollector(options) {
       }
       if (!anchored && captured) {
         anchor = {
-          dateKey: todayKey,
+          dateKey: captured.dateKey,
+          timeZone: captured.timeZone,
           today: captured.windowsPeriods.today,
           month: captured.windowsPeriods.month,
           allTime: captured.windowsPeriods.allTime,
@@ -3165,7 +3249,7 @@ function startCollector(options) {
           const visibleAt = visibleSummary.updatedAt || summary.updatedAt;
           const visibleDate = visibleAt ? new Date(visibleAt) : new Date();
           const visibleDateKey = Number.isFinite(visibleDate.getTime())
-            ? localTodayKey(visibleDate)
+            ? localTodayKey(visibleDate, timeZone)
             : todayKey;
           const retainedToday = tickLocalView?.sessionKeys?.length
             ? applyPeriodDelta(visibleSummary.today, emptyPeriod(), tickLocalView.today)
@@ -3634,7 +3718,7 @@ function startCollector(options) {
     // does not drift from reality over a long-running session.
     // lastFullScanAt === 0 means no valid timestamp exists (cold start,
     // unparseable, or future timestamp) — force a full scan immediately.
-    const anchorToday = Boolean(!fullScanDue && anchor && anchor.dateKey === localTodayKey());
+    const anchorToday = Boolean(!fullScanDue && anchor && anchor.dateKey === localTodayKey(collectionDate(options.now), collectorTimeZone(options)));
     const sourceSelfSync = activityGated ? sourceSyncQueue.takeDue() : null;
     // Smart mode carries the clients its watch events named since the last tick
     // and unions the self-synced ones on top regardless. Their tokscale cache

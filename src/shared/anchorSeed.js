@@ -35,10 +35,12 @@ function deviceRecordFromAnchor(saved, options = {}) {
     platform = '',
     now = new Date()
   } = options;
-  const qoderCnSources = qoderCnSourcesForClients(clients, { homeDir, env, platform: sourcePlatform });
+  // The device record carries an architecture suffix; source paths use the OS.
+  const hostPlatform = sourcePlatform || platform.split('-')[0] || process.platform;
+  const qoderCnSources = qoderCnSourcesForClients(clients, { homeDir, env, platform: hostPlatform });
   const qoderCnDbPath = qoderCnDbPathOption === undefined ? qoderCnSources.dbPath : qoderCnDbPathOption;
   const qoderCnProjectsDir = qoderCnProjectsDirOption === undefined ? qoderCnSources.projectsDir : qoderCnProjectsDirOption;
-  const trust = collectorAnchorTrust(saved, { ...options, clients, allTimeSince, projectsEnabled, qoderCnDbPath, qoderCnProjectsDir, customScanPaths, now });
+  const trust = collectorAnchorTrust(saved, { ...options, platform: hostPlatform, clients, allTimeSince, projectsEnabled, qoderCnDbPath, qoderCnProjectsDir, customScanPaths, now });
   if (!trust) return null;
   // The seed's own rule, and the one place it is stricter than the collector.
   // A capture time the collector cannot trust only costs it a full scan, but
@@ -83,7 +85,7 @@ function deviceRecordFromAnchor(saved, options = {}) {
     // comparing UTC days, and anywhere ahead of UTC a local day that has not
     // rolled over in UTC yet reads as an expired window: today's tokens get
     // dropped and the card shows the zero this whole path exists to avoid.
-    periodWindows: computePeriodWindows(now),
+    periodWindows: computePeriodWindows(now, saved.timeZone),
     today: withWsl(saved.today, wsl?.today),
     month: withWsl(saved.month, wsl?.month),
     allTime: withWsl(saved.allTime, wsl?.allTime),

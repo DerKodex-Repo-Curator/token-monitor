@@ -15,10 +15,9 @@ const {
 const ARCHIVE_VERSION = 1;
 const archiveReadCache = new Map();
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const { ownedSessionSourcePath } = require('./usage/sessionSourceState');
 const { emptyPeriod } = require('./usage');
 const { addArchivedSession, isSessionUsageArchiveEvidence } = require('./usage/sessionUsageArchive');
-const { captureSourceLedger, legacyCostsEqual, legacyDaysMatch, legacySessionAccounting, selectLegacyDay, largerLegacyPeriod, ledgerFromLegacyArchive, normalizeSourceLedger, projectSourceLedger, sourceSnapshotsFromGraphs } = require('./usage/sourceLedger');
+const { captureSourceLedger, legacyCostsEqual, legacyDaysMatch, legacySessionAccounting, selectLegacyDay, largerLegacyPeriod, normalizeSourceLedger, projectSourceLedger, sourceSnapshotsFromGraphs } = require('./usage/sourceLedger');
 
 function sourceProjectionClient(value) {
   const client = normalizeTokscaleClientName(value);
@@ -246,60 +245,6 @@ function normalizeDailyHistoryArchive(value) {
     normalized.sourceLedger = recoverLegacyDayAllocations(normalizeSourceLedger(value.sourceLedger));
     return normalized;
   }
-  for (const [rawClient, entry] of Object.entries(value?.sourceSnapshots || {})) {
-    const client = sourceClient(rawClient);
-    const metadata = sourceMetadata(entry);
-    if (!client || !metadata) continue;
-    normalized.sourceSnapshots ||= {};
-    normalized.sourceSnapshots[client] = {
-      ...metadata, replacementAuthority: entry.replacementAuthority === true,
-      ...(entry.reason ? { reason: String(entry.reason) } : {}),
-      ...(validCapturedAt(entry.observationFrontier) ? { observationFrontier: entry.observationFrontier } : {}),
-      ...(entry.projectIdentified === true ? { projectIdentified: true } : {}),
-      ...(Array.isArray(entry.unresolvedSessionIds) ? { unresolvedSessionIds: entry.unresolvedSessionIds
-        .map(id => sourceSessionId(id, client)).filter(Boolean) } : {}),
-      ...(entry.fallbackDays ? { fallbackDays: sourceDays(entry.fallbackDays, client, false) || {} } : {})
-    };
-  }
-  for (const [key, entry] of Object.entries(value?.sourceSessions || {})) {
-    const client = sourceClient(entry?.client);
-    const sessionId = sourceSessionId(entry?.sessionId, client);
-    const metadata = sourceMetadata(entry);
-    const days = sourceDays(entry?.days, client, false);
-    const events = sourceEvents(entry?.events, client, false);
-    if (!client || !sessionId || key !== `${client}:${sessionId}` || !metadata
-      || !days || !events || !eventsMatchDays(events, days)) {
-      // Pre-event archives and invalid identities cannot be made exact by
-      // inventing ownership. Keep their usage available for later migration.
-      normalized.unresolvedDays ||= {};
-      mergeUnresolvedDays(normalized.unresolvedDays, entry?.days, true);
-      if (normalized.sourceSnapshots?.[client] && Array.isArray(entry?.events) && entry?.eventIdentityVersion === 1) {
-        normalized.sourceSnapshots[client].replacementAuthority = false;
-        normalized.sourceSnapshots[client].reason = 'identity-gap';
-      }
-      continue;
-    }
-    const sourcePath = ownedSessionSourcePath(entry.sourcePath);
-    normalized.sourceSessions ||= {};
-    normalized.sourceSessions[key] = {
-      client, sessionId, ...metadata, days, events,
-      ...(events.some(event => event.id === null && Object.keys(event.days).length)
-        ? { unresolvedDays: daysFromEvents(events.filter(event => event.id === null)) } : {}),
-      ...(sourcePath ? { sourcePath } : {}),
-      sourceState: entry.sourceState === 'present' ? 'present'
-        : entry.sourceState === 'missing' && sourcePath ? 'missing' : 'unknown',
-      ...(validCapturedAt(entry.sourceObservedAt) ? { sourceObservedAt: entry.sourceObservedAt } : {})
-    };
-  }
-  if (normalized.sourceSnapshots || normalized.sourceSessions || value?.sourceClients?.length) {
-    normalized.sourceClients = value?.sourceClients || [];
-    normalized.sourceLedger = ledgerFromLegacyArchive(normalized, {
-      legacyBoundary: clients => legacyBoundary(normalized, clients)
-    });
-    delete normalized.sourceClients;
-    delete normalized.sourceSnapshots;
-    delete normalized.sourceSessions;
-  }
   return normalized;
 }
 
@@ -310,102 +255,29 @@ function sourceClient(value) {
     && !['unknown', 'synthetic', 'null', 'undefined'].includes(client.toLowerCase()) ? client : null;
 }
 
-function sourceSessionId(value, client) {
-  if (typeof value !== 'string') return null;
-  const id = value.trim();
-  return id && !id.includes('\0') && id.toLowerCase() !== 'unknown'
-    && !(client === 'copilot' && id.toLowerCase() === 'unknown-session') ? id : null;
-}
-
-function validCapturedAt(value) {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value));
-}
-
-function sourceMetadata(value) {
-  if (!validCapturedAt(value?.capturedAt) || value.eventIdentityVersion !== 1
-    || typeof value.bucketTimezone !== 'string' || !value.bucketTimezone.trim()
-    || typeof value.dayKey !== 'string' || !DAY_KEY_RE.test(value.dayKey)
-    || !Number.isFinite(Date.parse(`${value.dayKey}T00:00:00Z`))
-    || new Date(`${value.dayKey}T00:00:00Z`).toISOString().slice(0, 10) !== value.dayKey) return null;
-  try { new Intl.DateTimeFormat('en', { timeZone: value.bucketTimezone }); } catch (_) { return null; }
-  return {
-    capturedAt: value.capturedAt, bucketTimezone: value.bucketTimezone,
-    dayKey: value.dayKey, eventIdentityVersion: 1
-  };
-}
-
-function sourceDays(value, client, graphRows) {
-  if (!value || typeof value !== 'object' || (graphRows && !Array.isArray(value))
-    || (!graphRows && Array.isArray(value))) return null;
-  if (graphRows && value.some(row => !DAY_KEY_RE.test(String(row?.date || '')) || !Array.isArray(row?.clients)
+function sourceDays(value, client) {
+  if (!Array.isArray(value)) return null;
+  if (value.some(row => !DAY_KEY_RE.test(String(row?.date || '')) || !Array.isArray(row?.clients)
     || row.clients.some(entry => sourceClient(entry?.client) !== client))) return null;
-  const days = graphRows ? Object.fromEntries(observationsFromGraphs({ contributions: value }, { sourceIdentity: true })) : value;
+  const days = Object.fromEntries(observationsFromGraphs({ contributions: value }, { sourceIdentity: true }));
   const result = {};
   for (const [date, rawDay] of Object.entries(days)) {
     if (!rawDay || typeof rawDay !== 'object' || !DAY_KEY_RE.test(date)
-      || (!graphRows && (!rawDay.observations || typeof rawDay.observations !== 'object'))) return null;
-    if (!graphRows && Object.values(rawDay.observations).some(row => sourceClient(row?.client) !== client)) return null;
+      || !rawDay.observations || typeof rawDay.observations !== 'object') return null;
     const day = normalizeDay(rawDay, date, true);
     if (day) result[day.date] = day;
   }
   return result;
 }
 
-function sourceEvents(value, client, graphRows) {
-  if (!Array.isArray(value)) return null;
-  const events = [];
-  const seen = new Set();
-  for (const event of value) {
-    if (!event || (event.id !== null && (typeof event.id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(event.id)))
-      || seen.has(event.id)) return null;
-    const days = sourceDays(event.days, client, graphRows);
-    if (!days) return null;
-    seen.add(event.id);
-    events.push({ id: event.id, days });
-  }
-  return events;
-}
-
-function daysFromEvents(events) {
-  const days = {};
-  for (const event of events) {
-    for (const [date, sourceDay] of Object.entries(event.days)) {
-      const day = days[date] ||= { date, activeTimeMs: 0, observations: {} };
-      for (const [key, observation] of Object.entries(sourceDay.observations)) {
-        day.observations[key] = addObservation(day.observations[key], observation);
-      }
-    }
-  }
-  return days;
-}
-
-function eventsMatchDays(events, days) {
-  const union = daysFromEvents(events);
-  const dates = new Set([...Object.keys(union), ...Object.keys(days)]);
-  for (const date of dates) {
-    const left = union[date]?.observations || {};
-    const right = days[date]?.observations || {};
-    if (Object.keys(left).length !== Object.keys(right).length) return false;
-    for (const [key, observation] of Object.entries(left)) {
-      const other = right[key];
-      if (!other || observation.tokenComponentsAvailable !== other.tokenComponentsAvailable) return false;
-      if (providerSet(observation.providerId) !== providerSet(other.providerId)) return false;
-      for (const field of ['tokens', 'messages', 'cost', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'reasoningTokens', 'unclassifiedTokens']) {
-        if (Math.abs(num(observation[field]) - num(other[field])) > 1e-9 * Math.max(1, num(observation[field]), num(other[field]))) return false;
-      }
-    }
-  }
-  return true;
-}
-
-function mergeUnresolvedDays(target, source, additive = false) {
+function mergeUnresolvedDays(target, source) {
   for (const [date, rawDay] of Object.entries(source || {})) {
     const day = normalizeDay(rawDay, date, true);
     if (!day) continue;
     const previous = target[date] || { date, activeTimeMs: 0, observations: {} };
     const observations = { ...previous.observations };
     for (const [key, observation] of Object.entries(day.observations)) {
-      observations[key] = additive ? addObservation(observations[key], observation) : observation;
+      observations[key] = observation;
     }
     target[date] = { ...day, activeTimeMs: Math.max(previous.activeTimeMs, day.activeTimeMs), observations };
   }
@@ -552,12 +424,7 @@ function captureSourceDailyHistory(archive, graphs, options) {
     ...options, timeZone: options.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone,
     retainedBoundaryChecked,
     canonicalClient: sourceProjectionClient,
-    legacyBoundary: (clients) => legacyBoundary(archive, clients, boundaryOptions),
-    matchLegacySession: (legacy, days) => {
-      const client = Object.values(legacy).flatMap(day => Object.values(day.observations || {}))[0]?.client;
-      const incoming = sourceDays(days, client, true);
-      return incoming && eventsMatchDays([{ days: incoming }], legacy);
-    }
+    legacyBoundary: (clients) => legacyBoundary(archive, clients, boundaryOptions)
   });
   if (Object.keys(result.ledger.scopes).length || Object.keys(result.ledger.observations || {}).length) archive.sourceLedger = result.ledger;
   const clients = new Set(Object.values(result.ledger.scopes).flatMap(scope => scope.clients).map(sourceProjectionClient));
@@ -1053,7 +920,7 @@ function graphFromDailyHistoryArchive(graphs, archive, options = {}) {
   currentDays.clear();
   for (const [date, day] of Object.entries(projected)) currentDays.set(date, day);
   const sourceDaysToProject = [
-    ...(sourceUsage?.sessions || []).flatMap(row => Object.values(sourceDays(row.days, row.client, true) || {})),
+    ...(sourceUsage?.sessions || []).flatMap(row => Object.values(sourceDays(row.days, row.client) || {})),
     ...(sourceUsage?.aggregates || [])
   ];
   for (const sourceDay of sourceDaysToProject) {
@@ -1088,7 +955,7 @@ function validateDailyHistoryArchiveDocument(value, filePath) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Could not parse JSON in ${filePath}: archive root must be an object`);
   }
-  for (const key of ['days', 'liveDays', 'sourceSessions', 'sourceSnapshots', 'unresolvedDays', 'sourceLedger']) {
+  for (const key of ['days', 'liveDays', 'unresolvedDays', 'sourceLedger']) {
     if (Object.prototype.hasOwnProperty.call(value, key)
       && (!value[key] || typeof value[key] !== 'object' || Array.isArray(value[key]))) {
       throw new Error(`Could not parse JSON in ${filePath}: ${key} must be an object`);

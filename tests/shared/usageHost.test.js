@@ -412,6 +412,10 @@ test('round trip through a real worker thread: transform, archive capture and st
     agentPidPath: path.join(sharedDir, 'no-agent.pid')
   });
 
+  assert.equal(await runtime.tick('preview-only'), true);
+  assert.deepEqual(events.find(([kind, message]) => kind === 'log' && message.startsWith('preview migration')), ['log', 'preview migration rows 0']);
+  assert.equal(runtime.getArchiveState().sessionCount, null);
+
   assert.equal(await runtime.tick('preview'), true);
   assert.equal(await runtime.tick('watch'), true);
 
@@ -419,8 +423,8 @@ test('round trip through a real worker thread: transform, archive capture and st
   assert.equal(updates.length, 2);
   assert.deepEqual(updates[1][3], { transformed: true });
   assert.equal(updates[1][1].allTime.sessions['codex:c1'].totalTokens, 120);
-  assert.equal(events.filter(([kind]) => kind === 'preview').length, 1);
-  assert.deepEqual(events.find(([kind]) => kind === 'log'), ['log', 'tick preview']);
+  assert.equal(events.filter(([kind]) => kind === 'preview').length, 2);
+  assert.deepEqual(events.find(([kind, message]) => kind === 'log' && message === 'tick preview'), ['log', 'tick preview']);
   assert.ok(events.some(([kind, event]) => kind === 'diagnostic' && event.code === 'scripted-tick'));
   assert.equal(runtime.getArchiveState().sessionCount, 1);
   // Rebuilt in the worker from the PID file: no agent is running, so it writes.

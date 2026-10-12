@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { collectUsageOnce, localTodayKey } = require('../../src/shared/collector');
-const { captureDailyHistoryArchive, graphFromDailyHistoryArchive, normalizeDailyHistoryArchive } = require('../../src/shared/dailyHistoryArchive');
+const { captureDailyHistoryArchive, captureLiveDailyHistory, graphFromDailyHistoryArchive, normalizeDailyHistoryArchive } = require('../../src/shared/dailyHistoryArchive');
 const { applySourceDailyUsage } = require('../../src/shared/usage/sourceDailyUsage');
 const { legacyAllocationMatches, legacyDaysMatch, selectLegacyDay } = require('../../src/shared/usage/sourceLedger');
 const { captureSessionUsageArchive, applySessionUsageArchive, updateSessionUsageArchive, isSessionUsageArchiveEvidence } = require('../../src/shared/usage/sessionUsageArchive');
@@ -929,25 +929,20 @@ test('whole native legacy observations can advance counters without migrating or
   assert.equal(prior.sessions['codex:old'].periods.allTime.totalTokens, 10);
 });
 
-test('canonical v1 MiMo aliases block raw v2 migration without renaming exact domains or treating equalSID/totals as proof', () => {
-  const days = { [todayKey]: { date: todayKey, observations: { old: { client: 'mimo', modelId: 'model', providerId: 'provider',
-    tokens: 45, cost: 0.45, messages: 1, tokenComponentsAvailable: true } } } };
-  const metadata = { capturedAt: now.toISOString(), bucketTimezone: timeZone, dayKey: todayKey, eventIdentityVersion: 1 };
-  const legacy = { version: 1, days: {}, sourceClients: ['mimo'],
-    sourceSnapshots: { mimo: { ...metadata, replacementAuthority: true } },
-    sourceSessions: { 'mimo:old': { ...metadata, client: 'mimo', sessionId: 'old', days,
-      events: [{ id: `sha256:${'a'.repeat(64)}`, days }], sourceState: 'present' } } };
+test('released canonical MiMo history blocks raw migration without renaming exact domains or inferring ownership', () => {
+  const previous = summary([row('mimo', 'old', 45)]);
+  const retainedSessions = captureSessionUsageArchive({}, previous, now);
+  const live = captureLiveDailyHistory({}, previous.today, calendar);
+  const legacy = { version: 1, days: live.liveDays };
   const incoming = graph([row('micode', 'old', 45, 'opaque-shared-mimo')], later(1));
   incoming.sourceUsage.scopes[0].clients.push('micode-desktop');
   incoming.sourceUsage.replacementClients.push('micode-desktop');
-  const archive = roundTrip(captureDailyHistoryArchive(legacy, incoming, calendar));
-  assert.deepEqual(Object.keys(archive.sourceLedger.scopes), ['legacy:mimo']);
-  assert.equal(archive.sourceLedger.observations['opaque-shared-mimo'].reason, 'unresolved-legacy-boundary');
+  const archive = roundTrip(captureDailyHistoryArchive(legacy, incoming, { ...calendar, sessionUsageArchive: retainedSessions }));
+  assert.deepEqual(Object.keys(archive.sourceLedger.scopes), ['opaque-shared-mimo']);
+  assert.equal(archive.sourceLedger.scopes['opaque-shared-mimo'].reason, 'unresolved-legacy-boundary');
   assertCounters(project(archive), 45);
   const nativeRawPartitions = Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
     { micode: summary([row('micode', 'old', 45)])[name] }]));
-  assertCounters(project(roundTrip(legacy), [row('micode', 'old', 45)], { replaceLive: false,
-    nativeRawPresence: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name, ['micode:old']])) }), 45);
   assertCounters(project(archive, [row('micode', 'old', 45)], { nativeRawPartitions,
     nativeRawPresence: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name, ['micode:old']])) }), 45);
   const rawWatch = project(archive, [row('micode', 'old', 45)], { replaceLive: false, nativeRawPartitions,
