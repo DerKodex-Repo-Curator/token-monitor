@@ -3,6 +3,8 @@
 
 'use strict';
 
+const { canonicalProjectKey } = require('./projectKey');
+
 // Evidence is additive to the existing device contract. A missing, malformed or
 // oversized claim never authorizes a deduction from accepted usage.
 const PERIODS = ['today', 'month', 'allTime'];
@@ -36,7 +38,10 @@ function packUsageIdentity(identity) {
   const flatten = (value, prefix = [], result = []) => {
     for (const [key, entry] of Object.entries(value || {})) {
       const path = [...prefix, key];
-      if (typeof entry !== 'number') { flatten(entry, path, result); continue; }
+      if (typeof entry !== 'number') {
+        if (entry && typeof entry === 'object') flatten(entry, path, result);
+        continue;
+      }
       if (!entry) continue;
       const signature = JSON.stringify(path);
       if (!pathIndices.has(signature)) { pathIndices.set(signature, paths.length); paths.push(path); }
@@ -165,6 +170,7 @@ function periodCounters(value) {
   for (const [key, session] of Object.entries(result.sessions)) {
     session.models = map(value.sessions[key]?.models, null, 'tokens');
     session.modelCosts = map(value.sessions[key]?.modelCosts, null, 'cost');
+    session.providers = map(value.sessions[key]?.providers, null, 'tokens');
   }
   result.projects = map(value?.projects, ['tokens', 'costUsd', 'unpricedTokens']);
   for (const [key, project] of Object.entries(result.projects)) project.clients = map(value.projects[key]?.clients, null, 'tokens');
@@ -257,6 +263,7 @@ function pruneEmptyAttribution(period) {
 
 function total(mapValue) { return Object.values(mapValue || {}).reduce((sum, n) => sum + n, 0); }
 function equal(a, b) {
+  if (Number.isSafeInteger(a || 0) && Number.isSafeInteger(b || 0)) return (a || 0) === (b || 0);
   return a === b || Math.abs((a || 0) - (b || 0)) <= 8 * Number.EPSILON * MAX_EVENTS * Math.max(a || 0, b || 0);
 }
 
@@ -279,14 +286,30 @@ function normalizedPeriodClaim(raw, accepted) {
     ['unpricedTokens', 'clientUnpricedTokens', 'modelUnpricedTokens']
   ]) {
     if (!equal(claim[scalar], claim[clients].claude) || !equal(claim[scalar], total(claim[models]))
-      || (claim[scalar] || 0) > (claim.totalTokens || 0)) return null;
+      || (claim[scalar] || 0) > (claim.totalTokens || 0) || !within(claim[models], claim.models)) return null;
   }
   if (!equal(claim.unpricedTokens, total(claim.clientModelUnpricedTokens.claude))
+    || !within(claim.clientModelUnpricedTokens.claude || {}, claim.models)
     || (claim.timedTokens || 0) > (claim.totalTokens || 0)
-    || (claim.timedOutputTokens || 0) > (claim.outputTokens || 0)) return null;
+    || (claim.timedOutputTokens || 0) > (claim.outputTokens || 0)
+    || ['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
+      .reduce((sum, field) => sum + (claim[field] || 0), 0) > (claim.totalTokens || 0)) return null;
+  for (const [model, row] of Object.entries(claim.modelThroughput || {})) {
+    if ((row.timedTokens || 0) > (claim.models[model] || 0)
+      || (row.timedOutputTokens || 0) > (claim.modelOutputs[model] || 0)) return null;
+  }
+  for (const [model, tokens] of Object.entries(claim.models)) {
+    if (['modelCacheReads', 'modelCacheWrites', 'modelOutputs', 'modelUnclassifiedTokens']
+      .reduce((sum, field) => sum + (claim[field][model] || 0), 0) > tokens) return null;
+  }
+  for (const field of ['timedTokens', 'timedOutputTokens', 'timedDurationMs']) {
+    if (!equal(claim[field], Object.values(claim.modelThroughput || {}).reduce((sum, row) => sum + (row[field] || 0), 0))) return null;
+  }
   for (const [key, session] of Object.entries(claim.sessions)) {
     if (!key.startsWith('claude:') || !equal(session.totalTokens, total(session.models))
-      || !equal(session.costUsd, total(session.modelCosts))) return null;
+      || !equal(session.costUsd, total(session.modelCosts))
+      || !within(session.models, claim.models) || !within(session.modelCosts, claim.modelCosts, true)
+      || Object.keys(session.providers).length > 0 && !equal(session.totalTokens, total(session.providers))) return null;
   }
   for (const project of Object.values(claim.projects)) {
     if (Object.keys(project.clients).some(client => client !== 'claude')
@@ -323,6 +346,11 @@ function normalizePeriodEvidence(raw, accepted) {
     const header = eventHeader(event);
     const usage = normalizedPeriodClaim(event?.usage, accepted);
     if (!header || !usage || ids.has(header.id)) return null;
+    const sessionKey = `claude:${header.sessionId || ''}`;
+    if (Object.keys(event.usage?.sessions || {}).some(key => key !== sessionKey)) return null;
+    const project = canonicalProjectKey(accepted?.sessions?.[sessionKey]?.projectLabel);
+    if (project && Object.keys(usage.projects).some(key => key !== project)) return null;
+    if (accepted?.sessions?.[sessionKey] && !project && Object.keys(usage.projects).length) return null;
     ids.add(header.id);
     addTree(sum, usage);
     events.push({ ...header, usage });
@@ -357,6 +385,12 @@ function normalizeHistoryEvidence(raw, accepted) {
         if (!equal(usage[field], usage.perClient.claude?.[field])
           || field !== 'messages' && !equal(usage[field], Object.values(usage.perModel).reduce((sum, row) => sum + (row[field] || 0), 0))
           || field !== 'messages' && (usage[field] || 0) > (usage.tokens || 0)) return null;
+      }
+      if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
+        .reduce((sum, field) => sum + (usage[field] || 0), 0) > (usage.tokens || 0)) return null;
+      for (const row of Object.values(usage.perModel)) {
+        if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
+          .reduce((sum, field) => sum + (row[field] || 0), 0) > (row.tokens || 0)) return null;
       }
       if (daily.has(day.date)) availableHistoryComponents(usage, daily.get(day.date));
       if (daily.has(day.date)) addTree(days.get(day.date) || (days.set(day.date, Object.create(null)), days.get(day.date)), usage);

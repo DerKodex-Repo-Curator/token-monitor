@@ -20,7 +20,7 @@ function usage(tokens, { model = 'claude-sonnet-4-5', cost = tokens / 1000000, s
     clientModels: { claude: { [model]: tokens } }, clientModelCosts: { claude: { [model]: cost } },
     sessions: { [`claude:${sid}`]: { client: 'claude', sessionId: sid, projectId: project, projectLabel: project,
       totalTokens: tokens, costUsd: cost, messageCount: 1, cacheReadTokens: tokens / 2, outputTokens: tokens / 10,
-      timedOutputTokens: timed ? tokens / 10 : 0, timedDurationMs: timed ? tokens : 0, models: { [model]: tokens }, modelCosts: { [model]: cost } } },
+      timedOutputTokens: timed ? tokens / 10 : 0, timedDurationMs: timed ? tokens : 0, models: { [model]: tokens }, modelCosts: { [model]: cost }, providers: { anthropic: tokens } } },
     projects: { [project]: { tokens, costUsd: cost, clients: { claude: tokens } } }
   });
 }
@@ -55,6 +55,7 @@ test('native events reconcile mirror duplicates across hostnames and keep disjoi
     assert.equal(period.projects.repo.tokens, 600);
     assert.equal(period.sessions['claude:session-a'].totalTokens, 600);
     assert.equal(period.sessions['claude:session-a'].messageCount, 3);
+    assert.equal(period.sessions['claude:session-a'].providers.anthropic, 600);
     assert.equal(period.costUsd, 0.0006);
   }
   assert.equal(result.devices.find(row => row.deviceId === 'windows').periods.allTime.totalTokens, 300);
@@ -93,6 +94,29 @@ test('limits-only retains matching proof, a legacy full usage update clears it',
   assert.equal(mergeDeviceRecord(initial, legacy).usageIdentity, undefined);
 });
 
+test('event model attribution and physical component totals bound session and throughput claims in both encodings', () => {
+  const first = { id: id(1), usage: usage(100, { model: 'model-a' }) };
+  const second = { id: id(2), usage: usage(100, { model: 'model-b' }) };
+  const accepted = device('host', [first, second], 'mirror');
+  for (const corrupt of [
+    row => { row.modelThroughput = { 'model-b': row.modelThroughput['model-a'] }; },
+    row => { row.sessions['claude:session-a'].models = { 'model-b': 100 }; row.sessions['claude:session-a'].modelCosts = { 'model-b': row.costUsd }; },
+    row => { row.cacheReadTokens = 100; row.clientCacheReads.claude = 100; row.modelCacheReads['model-a'] = 100; row.outputTokens = 100; row.clientOutputs.claude = 100; row.modelOutputs['model-a'] = 100; }
+  ]) {
+    const raw = structuredClone(normalizeUsageIdentity(accepted.usageIdentity, accepted));
+    // All-time uploads intentionally remove session detail before validation.
+    // Exercise the session-bearing Today evidence in both encodings.
+    delete raw.periods.month;
+    delete raw.periods.allTime;
+    for (const evidence of Object.values(raw.periods)) {
+      evidence.events = [structuredClone(evidence.events[0])];
+      corrupt(evidence.events[0].usage);
+    }
+    assert.equal(normalizeUsageIdentity(raw, accepted), null);
+    assert.equal(normalizeUsageIdentity(packUsageIdentity(raw), accepted), null);
+  }
+});
+
 test('inconsistent component and foreign client attribution cannot authorize deductions', () => {
   const initial = device('a', [{ id: id(1), usage: usage(100) }]);
   for (const [index, corrupt] of [
@@ -100,6 +124,7 @@ test('inconsistent component and foreign client attribution cannot authorize ded
     row => { row.modelOutputs['claude-sonnet-4-5'] = 5; },
     row => { row.projects.repo.clients = { codex: 100 }; },
     row => { row.sessions['codex:session-a'] = row.sessions['claude:session-a']; delete row.sessions['claude:session-a']; },
+    row => { row.sessions['claude:other-session'] = row.sessions['claude:session-a']; delete row.sessions['claude:session-a']; },
     row => { row.sessions['claude:session-a'].models = { 'cost-model': 99.5 }; }
   ].entries()) {
     const raw = structuredClone(initial);
@@ -109,6 +134,16 @@ test('inconsistent component and foreign client attribution cannot authorize ded
     }
     assert.equal(normalizeDeviceRecord(raw).usageIdentity, undefined, `corruption ${index}`);
   }
+});
+
+test('an unlabeled session cannot authorize a deduction from an unrelated project', () => {
+  const record = device('host', [{ id: id(1), usage: usage(100) }], 'mirror');
+  for (const period of [record.today, record.month, record.allTime]) {
+    delete period.sessions['claude:session-a'].projectLabel;
+  }
+  const raw = { ...record.usageIdentity, periods: { today: record.usageIdentity.periods.today } };
+  assert.equal(normalizeUsageIdentity(raw, record), null);
+  assert.equal(normalizeUsageIdentity(packUsageIdentity(raw), record), null);
 });
 
 test('expired native Today cannot erase a current mirror contribution', () => {
