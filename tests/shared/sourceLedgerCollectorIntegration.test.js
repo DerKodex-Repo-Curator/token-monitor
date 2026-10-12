@@ -10,6 +10,7 @@ const { extractUsageFromTokscale, mergePeriods } = require('../../src/shared/usa
 const { createUsageTransform } = require('../../src/shared/usage/usageTransform');
 const { createSessionUsageArchiveStore } = require('../../src/shared/usage/sessionUsageArchiveStore');
 const { createLocalUsageStore } = require('../../src/shared/providers/codex/localUsageStore');
+const { tokscaleConfigDir } = require('../../src/shared/tokscaleConfig');
 const { execFileSync } = require('node:child_process');
 
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -100,26 +101,29 @@ for (const client of ['gemini', 'codex']) test(`native projection preserves sepa
 test('Dots real SQLite request ledger survives native noHistory and locked watch projection', async t => {
   const f = fixture(t);
   const store = createLocalUsageStore({ databasePath: path.join(f.directory, 'dots.sqlite') });
-  t.after(() => store.close());
-  const id = '01234567-1234-1234-1234-123456789abc';
-  const environment = { id: 'local-env', executorId: 'local-executor', executorLabel: 'this computer', type: 'local', cwd: '/fixture' };
-  const tokens = { inputTokens: 9, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 9 };
-  store.observe({ accountKey: 'fixture-account', thread: { id, sessionId: 'ancestor', threadSource: 'cli', executorId: 'local-executor', model: 'fixture-model', environments: [environment] },
-    ...environment, turnId: 'turn-1', tokenUsage: { last: tokens, total: tokens }, now: now.toISOString() });
-  assert.equal(store.rows().length, 1);
-  let projection, captured, status = 'complete';
-  const options = { ...f.options, codexLocalUsageEnabled: true, codexLocalUsageStore: store,
-    lookupModelPricing: async () => ({}),
-    runTokscale: async () => ({ entries: [row('codex', 'native')] }),
-    runGraph: async () => graph([row('codex', 'native')], new Date(now.getTime() + 1000), status),
-    onSourceArchiveComputed: value => { projection = value; }, onAnchorComputed: value => { captured = value; } };
-  assertPeriods(await collectUsageOnce(options), 109);
-  assertPeriods(await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection }), 109);
-  status = 'partial';
-  assertPeriods(await collectUsageOnce(options), 109);
-  assert.equal(projection.scopes[0].blockNativeWatch, true);
-  const anchor = { ...captured.windowsPeriods, dateKey: captured.dateKey, timeZone: captured.timeZone, todayPartitions: captured.todayPartitions };
-  assertPeriods(await collectUsageOnce({ ...options, includeHistory: false, todayOnlyAnchor: anchor, sourceArchiveSnapshot: projection }), 109);
+  try {
+    const id = '01234567-1234-1234-1234-123456789abc';
+    const environment = { id: 'local-env', executorId: 'local-executor', executorLabel: 'this computer', type: 'local', cwd: '/fixture' };
+    const tokens = { inputTokens: 9, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 9 };
+    store.observe({ accountKey: 'fixture-account', thread: { id, sessionId: 'ancestor', threadSource: 'cli', executorId: 'local-executor', model: 'fixture-model', environments: [environment] },
+      ...environment, turnId: 'turn-1', tokenUsage: { last: tokens, total: tokens }, now: now.toISOString() });
+    assert.equal(store.rows().length, 1);
+    let projection, captured, status = 'complete';
+    const options = { ...f.options, codexLocalUsageEnabled: true, codexLocalUsageStore: store,
+      lookupModelPricing: async () => ({}),
+      runTokscale: async () => ({ entries: [row('codex', 'native')] }),
+      runGraph: async () => graph([row('codex', 'native')], new Date(now.getTime() + 1000), status),
+      onSourceArchiveComputed: value => { projection = value; }, onAnchorComputed: value => { captured = value; } };
+    assertPeriods(await collectUsageOnce(options), 109);
+    assertPeriods(await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection }), 109);
+    status = 'partial';
+    assertPeriods(await collectUsageOnce(options), 109);
+    assert.equal(projection.scopes[0].blockNativeWatch, true);
+    const anchor = { ...captured.windowsPeriods, dateKey: captured.dateKey, timeZone: captured.timeZone, todayPartitions: captured.todayPartitions };
+    assertPeriods(await collectUsageOnce({ ...options, includeHistory: false, todayOnlyAnchor: anchor, sourceArchiveSnapshot: projection }), 109);
+  } finally {
+    store.close();
+  }
 });
 
 for (const aggregate of [false, true]) test(`raw partition fallback does not crash History; aggregate=${aggregate}`, async t => {
@@ -180,7 +184,7 @@ test('pinned-zone calendar, DST boundaries and persisted anchors use the native 
       for(const [at,key,end] of [['2026-10-12T04:00Z','2026-10-11','2026-10-12T07:00:00.000Z'],['2026-03-08T10:00Z','2026-03-08','2026-03-09T07:00:00.000Z'],['2026-11-01T09:00Z','2026-11-01','2026-11-02T08:00:00.000Z'],['2026-11-01T06:00Z','2026-10-31','2026-11-01T07:00:00.000Z']]){
         const windows=computePeriodWindows(new Date(at),'America/Los_Angeles'); assert.equal(windows.today.key,key);assert.equal(windows.today.endsAt,end);
       }
-      const opts={homeDir:home,env:{},dailyHistoryArchiveEnabled:true,clients:'codex',allTimeSince:'2020-01-01',now:new Date('2026-10-12T04:00Z'),pricingRevision:'fixed'};
+      const opts={homeDir:home,env:{},platform:'darwin',dailyHistoryArchiveEnabled:true,clients:'codex',allTimeSince:'2020-01-01',now:new Date('2026-10-12T04:00Z'),pricingRevision:'fixed'};
       const saved={dateKey:'2026-10-11',timeZone:'America/Los_Angeles',today:emptyPeriod(),month:emptyPeriod(),allTime:emptyPeriod(),configFingerprint:configFingerprint('codex','2020-01-01',true,'','',null,'fixed'),fullScanAt:'2026-10-12T03:00Z'};
       assert.ok(collectorAnchorTrust(saved,opts));assert.equal(deviceRecordFromAnchor(saved,opts).periodWindows.today.key,'2026-10-11');
       assert.equal(collectorAnchorTrust({...saved,timeZone:undefined},opts),null);
@@ -211,8 +215,9 @@ test('pinned-zone calendar, DST boundaries and persisted anchors use the native 
 test('pinned full and unchanged/append watch use one day and exact deltas', async t => {
   const f = fixture(t);
   const pin = zone === 'UTC' ? 'America/Los_Angeles' : 'UTC';
-  fs.mkdirSync(path.join(f.directory, '.config/tokscale'), { recursive: true });
-  fs.writeFileSync(path.join(f.directory, '.config/tokscale/settings.json'), JSON.stringify({ scanner: { bucketTimezone: pin } }));
+  const configDir = tokscaleConfigDir(f.options);
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ scanner: { bucketTimezone: pin } }));
   const clock = new Date('2026-10-12T04:00Z');
   let input = 100, projection, captured;
   const options = { ...f.options, now: clock,

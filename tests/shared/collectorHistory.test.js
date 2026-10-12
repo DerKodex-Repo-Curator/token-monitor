@@ -412,6 +412,8 @@ test('collectUsageOnce hands the live day total to history across local rollover
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const archivePath = path.join(dir, 'daily-history.json');
   const common = {
+    homeDir: dir,
+    env: {},
     clients: 'claude',
     allTimeSince: '2026-01-01',
     deviceId: 'live-handoff',
@@ -449,6 +451,8 @@ test('collectUsageOnce uses the live history snapshot while archive ownership is
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const archivePath = path.join(dir, 'daily-history.json');
   const result = await collectUsageOnce({
+    homeDir: dir,
+    env: {},
     clients: 'claude',
     allTimeSince: '2026-01-01',
     deviceId: 'read-only-live-history',
@@ -478,6 +482,8 @@ test('startCollector retains a transformed watch total until the next history ti
   const todayKey = localTodayKey();
   const updates = [];
   const runtime = startCollector({
+    homeDir: dir,
+    env: {},
     clients: 'claude',
     allTimeSince: '2026-01-01',
     deviceId: 'live-history-ticks',

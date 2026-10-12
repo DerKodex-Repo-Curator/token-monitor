@@ -408,7 +408,8 @@ test('source ledger counters are not duplicated into generic session accounting;
 
 test('privacy whitelist drops scanner text and paths; source paths/evidence stay local after projection', t => {
   const file = temp(t);
-  const sourcePath = path.join(path.dirname(file.path), 'private-source.jsonl');
+  // Exercise JSON escaping even on hosts whose path separator is a slash.
+  const sourcePath = path.join(path.dirname(file.path), 'private\\source.jsonl');
   const input = graph([{ ...session('A', 45), title: 'private scanner text' }]);
   input.sourceUsage.sessions[0].events[0].contributions[0].prompt = 'secret prompt';
   const first = capture({}, input, { sourcePaths: { 'claude:A': sourcePath } });
@@ -418,11 +419,11 @@ test('privacy whitelist drops scanner text and paths; source paths/evidence stay
   const stored = fs.readFileSync(file.path, 'utf8');
   assert.equal(stored.includes('private scanner text'), false);
   assert.equal(stored.includes('secret prompt'), false);
-  assert.equal(stored.includes(sourcePath), true);
+  assert.equal(JSON.parse(stored).sourceLedger.scopes['scanner-domain'].sessions['claude:A'].sourcePath, sourcePath);
   const next = visible(readDailyHistoryArchive(file));
   assert.equal(next.allTime.sessions['claude:A'].archived, true);
   const wire = serializeSyncPayload(applySessionUsageArchive(next, {}, { now: new Date(CLOCK) })).body;
-  for (const secret of [sourcePath, 'sourceLedger', 'ownedClients', 'scanner-domain', 'sourceObservedAt']) assert.equal(wire.includes(secret), false, secret);
+  for (const secret of [sourcePath, 'sourceLedger', 'ownedClients', 'scanner-domain', 'sourceObservedAt']) assert.equal(wire.includes(JSON.stringify(secret).slice(1, -1)), false, secret);
 });
 
 test('ledger projection and canonical loading reuse retained accounting without renormalizing events', () => {
