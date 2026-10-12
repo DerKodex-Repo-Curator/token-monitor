@@ -6,7 +6,7 @@ const { createHash } = require('node:crypto');
 const { extractUsageFromTokscale, normalizePeriod } = require('../../src/shared/usage');
 const { captureSourceLedger, projectSourceLedger, getSourceLedger } = require('../../src/shared/usage/sourceLedger');
 const { periodIdentityStateFromSource, identityPeriodFromState, replaceIdentityToday, usageIdentityFromState,
-  historyIdentityFromLedger, identityStateFromLedger } = require('../../src/shared/usage/sourceIdentity');
+  historyIdentityFromLedger, identityStateFromLedger, acceptedClaudeWindows } = require('../../src/shared/usage/sourceIdentity');
 
 const id = text => `sha256:${createHash('sha256').update(text).digest('hex')}`;
 const clock = '2026-10-13T06:00:00.000Z';
@@ -138,4 +138,19 @@ test('accepted History includes old days retained only by a monthly tier', () =>
   const proof = historyIdentityFromLedger(ledger, { timeZone: 'UTC', history: { daily: [], monthly: [{ month: '2026-05' }] } });
   assert.equal(proof.events[0].days[0].date, '2026-05-10');
   assert.equal(proof.events[0].days[0].usage.tokens, 17);
+});
+
+test('accepted no-archive windows carry aggregates only within their bounds and rebucket dated event claims at rollover', () => {
+  const events = [event('A')];
+  const accepted = { dateKey: day, periods: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name, nativePeriod(events)])),
+    identityState: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name, state(events)])) };
+  const nextDay = acceptedClaudeWindows(accepted, { todayKey: '2026-10-14', allTimeSince: '2026-01-01' });
+  assert.equal(nextDay.periods.today.totalTokens, 0);
+  assert.equal(nextDay.periods.month.totalTokens, 20);
+  const nextMonth = acceptedClaudeWindows(accepted, { todayKey: '2026-11-01', allTimeSince: '2026-01-01' });
+  assert.equal(nextMonth.periods.today.totalTokens, 0);
+  assert.equal(nextMonth.periods.month.totalTokens, 0);
+  assert.equal(nextMonth.periods.allTime.totalTokens, 20);
+  assert.equal(nextMonth.identityState.month.events.length, 0);
+  assert.equal(nextMonth.identityState.allTime.events[0].id, id('A'));
 });

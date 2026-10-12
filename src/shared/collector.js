@@ -40,7 +40,7 @@ const { retainDailyHistory, retainLiveDailyHistory, captureLiveDailyHistory, sou
 const { applySourceDailyUsage } = require('./usage/sourceDailyUsage');
 const sourceLedger = require('./usage/sourceLedger');
 const { legacyCostsEqual } = sourceLedger;
-const { periodIdentityStateFromSource, replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, historyIdentityFromLedger } = require('./usage/sourceIdentity');
+const { periodIdentityStateFromSource, replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, historyIdentityFromLedger, acceptedClaudeWindows } = require('./usage/sourceIdentity');
 const { readSessionUsageArchiveEvidence } = require('./usage/sessionUsageArchiveStore');
 const {
   createSubprocessTermination,
@@ -945,6 +945,7 @@ async function collectHistoryOnce(options) {
       });
       throwIfAborted(options.signal);
       rawGraphs.push(graphJson);
+      options.onNativeGraph?.(graphJson);
       options.onSourceUsage?.(graphJson.sourceUsage);
       liveHistory = normalizeHistory(parseGraphResult(graphJson), { capDays, todayKey });
       // Graph inclusion is independent of each ModelReport's acknowledgement.
@@ -1222,6 +1223,10 @@ async function collectUsageOnce(options) {
   const nativeIdentityState = anchorUsed && identityConfigMatches
     ? { ...anchor.nativeIdentityState, today: anchor.todayIdentityState ?? anchor.nativeIdentityState?.today } : {};
   const nativeSources = {};
+  const previousClaude = !options.dailyHistoryArchiveEnabled
+    && options.noArchiveClaudeSnapshot?.identityFingerprint === identityFingerprint
+    ? options.noArchiveClaudeSnapshot : null;
+  const retainedClaude = previousClaude ? acceptedClaudeWindows(previousClaude, { todayKey, allTimeSince }) : null;
   const captureIdentity = (name, json, period) => {
     nativeSources[name] = json.sourceUsage;
     nativeIdentityState[name] = periodIdentityStateFromSource(json.sourceUsage, period, { timeZone, todayKey, allTimeSince, periodName: name });
@@ -1243,7 +1248,14 @@ async function collectUsageOnce(options) {
   }
   const emitProgress = (periods) => {
     if (typeof options.onProgress !== 'function') return;
-    try { options.onProgress({ ...periods, updatedAt: collectedAt.toISOString() }); } catch (_) {}
+    const visible = { ...periods };
+    if (retainedClaude) for (const name of Object.keys(periods)) {
+      if (nativeSources[name] && !nativeClaudeComplete(nativeSources[name])) {
+        const partitions = name === 'today' ? todayPartitions : nativePartitions[name];
+        visible[name] = mergePeriods(...Object.entries(partitions || {}).filter(([client]) => client !== 'claude').map(([, period]) => period), retainedClaude.periods[name]);
+      }
+    }
+    try { options.onProgress({ ...visible, updatedAt: collectedAt.toISOString() }); } catch (_) {}
   };
   if (normalizedClients) {
     const syncClients = targetRequested ? targetClientsCsv : normalizedClients;
@@ -1425,10 +1437,11 @@ async function collectUsageOnce(options) {
   // 3. !anchorUsed (full scan): scan WSL as part of the complete rescan.
   const windowsPeriods = { today, month, allTime };
   const claudeNativeScanned = Object.hasOwn(nativeSources, 'today');
-  const nativeClaudeComplete = source => source?.version === 2 && source.eventIdentityVersion === 2
+  function nativeClaudeComplete(source) { return source?.version === 2 && source.eventIdentityVersion === 2
     && source.scopes?.some(scope => scope.clients?.includes('claude') && scope.readStatus === 'complete' && scope.identityStatus === 'exact')
     && !source.scopes.some(scope => scope.clients?.includes('claude') && (scope.readStatus !== 'complete' || scope.identityStatus !== 'exact'))
-    && !source.partialClients?.includes('claude');
+    && !source.partialClients?.includes('claude') && Number(source.rowsWithoutIdentity?.claude || 0) === 0
+    && (!combinedWslClaude || !wslDiscovery?.claudeRoots?.length || sourceRootsAcknowledged(source, wslDiscovery.claudeRoots)); }
   const claudeReadBlocked = Boolean(anchorUsed && (anchor.claudeReadBlocked
     || claudeNativeScanned && (anchor.claudeIncludedInNative && !sourceRootsAcknowledged(nativeSources.today, wslDiscovery?.claudeRoots || [])
       || nativeSources.today && !nativeClaudeComplete(nativeSources.today)
@@ -1598,6 +1611,7 @@ async function collectUsageOnce(options) {
 
   let acceptedSourceProjection = null;
   let liveHistoryIdentityLedger = null;
+  let nativeHistoryGraph = null;
   const summary = {
     deviceId,
     hostname: os.hostname(),
@@ -1658,6 +1672,7 @@ async function collectUsageOnce(options) {
       scanRoots,
       wslDiscovery: combinedWslClaude ? wslDiscovery : null,
       onDiagnosticEvent: options.onDiagnosticEvent,
+      onNativeGraph: graph => { nativeHistoryGraph = graph; },
       codexLocalGraph: codexLocalView?.graph || null,
       historyEnabled: options.historyEnabled,
       commandTimeoutMs: options.historyTimeoutMs,
@@ -1744,6 +1759,54 @@ async function collectUsageOnce(options) {
   }
   if (projectsEnabled) applyProjectRollups(summary);
   let acceptedIdentityState = nativeIdentityState;
+  let noArchiveClaudeSnapshot = previousClaude;
+  const noArchiveReadFailed = retainedClaude && (Object.values(nativeSources).some(source => !nativeClaudeComplete(source))
+    || options.includeHistory && (!nativeHistoryGraph?.sourceUsage?.fullHistory || !nativeClaudeComplete(nativeHistoryGraph.sourceUsage)));
+  if (!options.dailyHistoryArchiveEnabled && retainedClaude && noArchiveReadFailed) {
+    for (const name of ['today', 'month', 'allTime']) {
+      const partitions = name === 'today' ? todayPartitions : nativePartitions[name];
+      // Full captures have exact client partitions. Warm captures retain the
+      // existing exact delta for other clients and replace only Claude's delta.
+      if (partitions) {
+        partitions.claude = retainedClaude.periods[name];
+        windowsPeriods[name] = mergePeriods(...Object.values(partitions));
+        summary[name] = mergePeriods(windowsPeriods[name], wslBundle[name], codexLocalView?.[name] || emptyPeriod());
+      } else {
+        const freshClaude = applyPeriodDelta(previousClaude.periods[name], todayPartitions?.claude || emptyPeriod(), previousClaude.periods.today);
+        summary[name] = applyPeriodDelta(summary[name], retainedClaude.periods[name], freshClaude);
+        windowsPeriods[name] = applyPeriodDelta(windowsPeriods[name], retainedClaude.periods[name], freshClaude);
+      }
+    }
+    acceptedIdentityState = retainedClaude.identityState;
+    if (options.includeHistory && nativeHistoryGraph && previousClaude.historyGraph) {
+      const otherGraph = { contributions: (nativeHistoryGraph?.contributions || []).map(day => ({ date: day.date,
+        clients: (day.clients || []).filter(row => normalizeClientName(row.client) !== 'claude') })) };
+      const historyOptions = { capDays: options.historyCapDays, todayKey };
+      summary.history = mergeHistories([normalizeHistory(parseGraphResult(otherGraph), historyOptions),
+        normalizeHistory(parseGraphResult(previousClaude.historyGraph), historyOptions)], historyOptions);
+    }
+    try { options.onDiagnosticEvent?.({ subsystem: 'collector', code: 'claude-read-retained' }); } catch (_) { /* observer only */ }
+  } else if (!options.dailyHistoryArchiveEnabled && trackedClientSet.has('claude')
+    && Object.values(nativeSources).every(nativeClaudeComplete)
+    && Object.keys(nativeSources).every(name => nativeIdentityState[name])
+    && (!previousClaude || !options.includeHistory || nativeHistoryGraph?.sourceUsage?.fullHistory && nativeClaudeComplete(nativeHistoryGraph.sourceUsage))) {
+    const periods = {};
+    for (const name of ['today', 'month', 'allTime']) periods[name] = nativePartitions[name]?.claude
+      || (previousClaude && name !== 'today' ? applyPeriodDelta(previousClaude.periods[name], todayPartitions?.claude || emptyPeriod(), previousClaude.periods.today)
+        : todayPartitions?.claude || emptyPeriod());
+    for (const period of Object.values(periods)) for (const [key, session] of Object.entries(period.sessions || {})) {
+      const metadata = summary.allTime.sessions?.[key];
+      for (const field of ['projectId', 'projectLabel', 'title']) if (metadata?.[field]) session[field] = metadata[field];
+    }
+    if (projectsEnabled) applyProjectRollups(periods);
+    noArchiveClaudeSnapshot = { identityFingerprint, dateKey: todayKey, timeZone, periods: structuredClone(periods),
+      identityState: structuredClone(nativeIdentityState),
+      historyGraph: nativeHistoryGraph?.sourceUsage?.fullHistory && nativeClaudeComplete(nativeHistoryGraph.sourceUsage)
+        ? { contributions: (nativeHistoryGraph.contributions || []).map(day => ({ date: day.date,
+        clients: (day.clients || []).filter(row => normalizeClientName(row.client) === 'claude') })) } : previousClaude?.historyGraph,
+      historyIdentity: previousClaude?.historyIdentity };
+  }
+  if (projectsEnabled) applyProjectRollups(summary);
   const ledger = sourceLedger.getSourceLedger?.(acceptedSourceProjection);
   if (acceptedSourceProjection?.ownedClients?.includes('claude')) {
     // Accepted accounting may retain a different revision despite equal totals.
@@ -1762,7 +1825,10 @@ async function collectUsageOnce(options) {
   }
   const usageIdentity = usageIdentityFromState(acceptedIdentityState, summary);
   const historyLedger = ledger || liveHistoryIdentityLedger;
-  const historyIdentity = summary.history && historyLedger ? historyIdentityFromLedger(historyLedger, { timeZone, history: summary.history }) : null;
+  const historyIdentity = noArchiveReadFailed ? previousClaude.historyIdentity
+    : summary.history && historyLedger ? historyIdentityFromLedger(historyLedger, { timeZone, history: summary.history }) : null;
+  if (noArchiveClaudeSnapshot && !noArchiveReadFailed && historyIdentity) noArchiveClaudeSnapshot.historyIdentity = historyIdentity;
+  options.onNoArchiveClaudeComputed?.(noArchiveClaudeSnapshot);
   if (usageIdentity || historyIdentity) summary.usageIdentity = {
     ...(usageIdentity || { version: 1, eventIdentityVersion: 2, periods: {} }),
     ...(historyIdentity ? { history: historyIdentity } : {})
@@ -3016,6 +3082,7 @@ function startCollector(options) {
   // anchor holds Windows-only periods; wslAnchor is the WSL contribution frozen
   // between full ticks (WSL is not scanned on watch ticks).
   let anchor = null;
+  let noArchiveClaudeSnapshot = null;
   let sourceArchiveSnapshot = null;
   let timezoneRevision = timezoneFingerprint(collectionDate(options.now), options);
   let wslAnchor = null;
@@ -3147,6 +3214,7 @@ function startCollector(options) {
   if (options.anchorPersistenceEnabled !== false) {
     try {
       const saved = readJson(anchorPath, null);
+      if (!options.dailyHistoryArchiveEnabled) noArchiveClaudeSnapshot = saved?.noArchiveClaudeSnapshot || null;
       const trust = collectorAnchorTrust(saved, {
         clients,
         allTimeSince,
@@ -3215,6 +3283,7 @@ function startCollector(options) {
         claudeReadBlocked: anchor.claudeReadBlocked,
         nativeIdentityState: anchor.nativeIdentityState,
         todayIdentityState: anchor.todayIdentityState,
+        noArchiveClaudeSnapshot,
         cursorAutoModelVersion: 1,
         today: anchor.today,
         month: anchor.month,
@@ -3350,6 +3419,8 @@ function startCollector(options) {
         deferLiveHistoryCapture: true,
         dailyHistoryLiveDays: liveDailyHistoryDays,
         sourceArchiveSnapshot,
+        noArchiveClaudeSnapshot,
+        onNoArchiveClaudeComputed: snapshot => { noArchiveClaudeSnapshot = snapshot; },
         onSourceArchiveComputed: snapshot => { sourceArchiveSnapshot = snapshot || sourceArchiveSnapshot; },
         onHistoryStatus: includeHistory ? (status) => {
           lastHistoryAttemptAt = Date.parse(status.attemptedAt) || lastHistoryAttemptAt;

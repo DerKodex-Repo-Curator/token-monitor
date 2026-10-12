@@ -7,8 +7,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { EventEmitter } = require('node:events');
+const { execFileSync } = require('node:child_process');
 const { collectUsageOnce, startCollector, configFingerprint, collectorAnchorTrust } = require('../../src/shared/collector');
 const { normalizeUsageIdentity } = require('../../src/shared/usageIdentity');
+const { createDeviceState } = require('../../src/shared/usage/deviceState');
+const { deviceRecordFromAnchor } = require('../../src/shared/anchorSeed');
 const { installInProcessWatchHost } = require('../helpers/watchHost');
 
 installInProcessWatchHost(test);
@@ -377,6 +380,170 @@ async function waitFor(condition, timeoutMs = 4500) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
+
+test('no-archive runtime retains accepted Claude periods and History on partial full scans, then accepts exact downward corrections', async t => {
+  const options = base(t, { historyEnabled: true, retainDeletedSessions: false, dailyHistoryArchiveEnabled: false });
+  const shared = process.env.TOKEN_MONITOR_SHARED_DIR;
+  process.env.TOKEN_MONITOR_SHARED_DIR = options.homeDir;
+  let mode = 'accepted';
+  const records = [];
+  const state = createDeviceState({ onRecord: record => records.push(record) });
+  const events = () => [event('shared', mode === 'accepted' ? 100 : mode === 'partial' ? 20 : 10)];
+  const readStatus = () => mode === 'partial' ? 'partial' : 'complete';
+  const collector = startCollector({ ...options, clients: 'claude,gemini', watchEnabled: false, limitsEnabled: false, intervalMs: 300000,
+    runTokscale: async () => {
+      const current = report(events(), {}, { readStatus: readStatus() });
+      current.entries.push({ client: 'gemini', sessionId: 'g', model: 'gemini-2.5-pro', input: mode === 'accepted' ? 3 : 7 });
+      return current;
+    }, runGraph: async () => {
+      const current = graph(events(), {});
+      current.sourceUsage.scopes[0].readStatus = readStatus();
+      current.contributions[0].clients.push({ client: 'gemini', modelId: 'gemini-2.5-pro', tokens: { input: mode === 'accepted' ? 3 : 7 }, cost: 0, messages: 1 });
+      return current;
+    }, onUpdate: (summary, reason) => state.updateUsage(summary, reason),
+    getSessionUsageArchive: () => { throw new Error('no archive read'); } });
+  try {
+    await collector.whenIdle();
+    const accepted = records.at(-1);
+    assert.equal(accepted.today.clients.claude, 100);
+    assert.equal(accepted.history.summary.totalTokens, 103);
+    mode = 'partial';
+    await collector.tick('interval', { todayOnly: false, forceHistory: true });
+    const retained = records.at(-1);
+    for (const name of ['today', 'month', 'allTime']) {
+      assert.equal(retained[name].clients.claude, 100, name);
+      assert.equal(retained[name].clients.gemini, 7, 'other clients remain fresh');
+      assert.deepEqual(retained.usageIdentity.periods[name], accepted.usageIdentity.periods[name]);
+    }
+    assert.equal(retained.history.summary.totalTokens, 107);
+    assert.deepEqual(retained.usageIdentity.history, accepted.usageIdentity.history);
+    assert.ok(normalizeUsageIdentity(retained.usageIdentity, retained).history);
+    const saved = JSON.parse(fs.readFileSync(path.join(options.homeDir, 'collector-anchor.json'), 'utf8'));
+    const seed = deviceRecordFromAnchor(saved, { ...options, clients: 'claude,gemini', platform: process.platform });
+    assert.equal(seed.today.clients.claude, 100, 'partial full capture persists accepted counters in the existing anchor');
+    assert.equal(seed.usageIdentity.periods.today.events[0].usage.totalTokens, 100);
+    assert.equal(saved.noArchiveClaudeSnapshot.periods.today.totalTokens, 100);
+    mode = 'corrected';
+    await collector.tick('interval', { todayOnly: false, forceHistory: true });
+    const corrected = records.at(-1);
+    for (const name of ['today', 'month', 'allTime']) assert.equal(corrected[name].clients.claude, 10, name);
+    assert.equal(corrected.history.summary.totalTokens, 17);
+    assert.equal(corrected.usageIdentity.periods.today.events[0].usage.totalTokens, 10);
+    assert.equal(corrected.usageIdentity.history.events[0].days[0].usage.tokens, 10);
+    assert.equal(fs.existsSync(path.join(options.homeDir, 'daily-history-archive.json')), false);
+  } finally {
+    collector.stop(); await collector.whenIdle(); state.stop();
+    if (shared === undefined) delete process.env.TOKEN_MONITOR_SHARED_DIR;
+    else process.env.TOKEN_MONITOR_SHARED_DIR = shared;
+  }
+});
+
+test('partial full scan at rollover derives accepted Claude windows from event days and drops proof across configuration changes', async t => {
+  const options = base(t, { historyEnabled: true, dailyHistoryArchiveEnabled: false });
+  const shared = process.env.TOKEN_MONITOR_SHARED_DIR;
+  process.env.TOKEN_MONITOR_SHARED_DIR = options.homeDir;
+  let clock = now;
+  let partial = false;
+  const records = [];
+  const collector = startCollector({ ...options, now: () => clock, watchEnabled: false, limitsEnabled: false, intervalMs: 300000,
+    runTokscale: async () => report([event('shared', partial ? 20 : 100)], {}, { readStatus: partial ? 'partial' : 'complete' }),
+    runGraph: async () => {
+      const current = graph([event('shared', partial ? 20 : 100)], {});
+      if (partial) current.sourceUsage.scopes[0].readStatus = 'partial';
+      return current;
+    }, onUpdate: summary => { records.push(summary); } });
+  try {
+    await collector.whenIdle();
+    partial = true;
+    clock = new Date('2026-10-14T06:00:00Z');
+    await collector.tick('interval', { todayOnly: false, forceHistory: true });
+    let retained = records.at(-1);
+    assert.equal(retained.today.totalTokens, 0);
+    assert.equal(retained.month.totalTokens, 100);
+    assert.equal(retained.allTime.totalTokens, 100);
+    assert.equal(retained.usageIdentity.periods.today, undefined);
+    clock = new Date('2026-11-01T06:00:00Z');
+    await collector.tick('interval', { todayOnly: false, forceHistory: true });
+    retained = records.at(-1);
+    assert.equal(retained.today.totalTokens, 0);
+    assert.equal(retained.month.totalTokens, 0);
+    assert.equal(retained.allTime.totalTokens, 100);
+    assert.equal(retained.history.summary.totalTokens, 100);
+    assert.equal(retained.usageIdentity.periods.month, undefined);
+    assert.equal(retained.usageIdentity.periods.allTime.events[0].usage.totalTokens, 100);
+    let saved;
+    saved = JSON.parse(fs.readFileSync(path.join(options.homeDir, 'collector-anchor.json'), 'utf8'));
+    const changed = await collectUsageOnce({ ...options, now: clock, scanRoots: { claude: ['/new-source/.claude'] },
+      noArchiveClaudeSnapshot: saved.noArchiveClaudeSnapshot, runTokscale: async () => report([event('new-config', 20)], {}, { readStatus: 'partial' }) });
+    assert.equal(changed.allTime.totalTokens, 20);
+    assert.equal(changed.usageIdentity, undefined);
+  } finally {
+    collector.stop(); await collector.whenIdle();
+    if (shared === undefined) delete process.env.TOKEN_MONITOR_SHARED_DIR;
+    else process.env.TOKEN_MONITOR_SHARED_DIR = shared;
+  }
+});
+
+const nativeBinary = process.env.TOKEN_MONITOR_TEST_TOKSCALE_BINARY;
+test('native lagging mirror cannot replace accepted no-archive usage when the original config root disappears',
+  { skip: !nativeBinary }, async t => {
+    const options = base(t, { historyEnabled: true, dailyHistoryArchiveEnabled: false, retainDeletedSessions: false });
+    const shared = process.env.TOKEN_MONITOR_SHARED_DIR;
+    const oldZone = process.env.TZ;
+    process.env.TOKEN_MONITOR_SHARED_DIR = options.homeDir;
+    process.env.TZ = 'UTC';
+    const originalRoot = path.join(options.homeDir, 'original', '.claude');
+    const mirrorDir = path.join(options.homeDir, '.claude', 'projects', 'ssh-s');
+    const originalDir = path.join(originalRoot, 'projects', '-work');
+    fs.mkdirSync(mirrorDir, { recursive: true });
+    fs.mkdirSync(originalDir, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const transcript = input => JSON.stringify({ type: 'assistant', timestamp, requestId: 'req',
+      message: { id: 'msg', model: 'claude-sonnet-4-20250514', usage: { input_tokens: input, output_tokens: 0,
+        cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n';
+    fs.writeFileSync(path.join(mirrorDir, 's.jsonl'), transcript(20));
+    fs.writeFileSync(path.join(originalDir, 's.jsonl'), transcript(100));
+    const cacheDir = path.join(options.homeDir, '.config', 'tokscale', 'cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    // Keep this native regression offline, including native pricing lookup.
+    for (const name of ['litellm', 'openrouter', 'models-dev']) fs.writeFileSync(path.join(cacheDir, `pricing-${name}.json`),
+      JSON.stringify({ timestamp: Math.floor(Date.now() / 1000), data: {
+        [name === 'models-dev' ? 'anthropic/claude-sonnet-4-20250514' : 'claude-sonnet-4-20250514']:
+          { input_cost_per_token: 0.000003, output_cost_per_token: 0.000015 } } }));
+    const env = { ...process.env, HOME: options.homeDir, USERPROFILE: options.homeDir, XDG_CONFIG_HOME: path.join(options.homeDir, '.config'),
+      TOKSCALE_SCAN_ROOTS_JSON: JSON.stringify({ claude: [originalRoot] }), TZ: 'UTC' };
+    const scan = input => JSON.parse(execFileSync(nativeBinary,
+      ['--json', '--client', input.clients, '--group-by', 'client,session,model', ...input.flags, '--source-snapshots'],
+      { env, timeout: 20000, encoding: 'utf8' }));
+    const scanGraph = input => JSON.parse(execFileSync(nativeBinary, ['graph', '--client', input.clients, '--source-snapshots'],
+      { env, timeout: 20000, encoding: 'utf8' }));
+    const state = createDeviceState();
+    const records = [];
+    const collector = startCollector({ ...options, now: () => new Date(), scanRoots: { claude: [originalRoot] },
+      watchEnabled: false, limitsEnabled: false, intervalMs: 300000, runTokscale: scan, runGraph: scanGraph,
+      onUpdate: (summary, reason) => { const record = state.updateUsage(summary, reason); records.push(record); } });
+    try {
+      await collector.whenIdle();
+      assert.equal(records.at(-1).today.totalTokens, 100);
+      assert.equal(records.at(-1).history.summary.totalTokens, 100);
+      assert.ok(records.at(-1).usageIdentity.history);
+      fs.renameSync(originalRoot, `${originalRoot}-unavailable`);
+      await collector.tick('interval', { todayOnly: false, forceHistory: true });
+      const retained = records.at(-1);
+      for (const name of ['today', 'month', 'allTime']) assert.equal(retained[name].totalTokens, 100, name);
+      assert.equal(retained.history.summary.totalTokens, 100);
+      assert.deepEqual(retained.usageIdentity, records[0].usageIdentity);
+      fs.renameSync(`${originalRoot}-unavailable`, originalRoot);
+      fs.writeFileSync(path.join(originalDir, 's.jsonl'), transcript(40));
+      await collector.tick('interval', { todayOnly: false, forceHistory: true });
+      for (const name of ['today', 'month', 'allTime']) assert.equal(records.at(-1)[name].totalTokens, 40, name);
+      assert.equal(records.at(-1).history.summary.totalTokens, 40);
+    } finally {
+      collector.stop(); await collector.whenIdle(); state.stop();
+      if (shared === undefined) delete process.env.TOKEN_MONITOR_SHARED_DIR; else process.env.TOKEN_MONITOR_SHARED_DIR = shared;
+      if (oldZone === undefined) delete process.env.TZ; else process.env.TZ = oldZone;
+    }
+  });
 
 test('cached acknowledged UNC originals trigger warm today scans alongside host mirrors and refresh on root changes', async t => {
   const options = base(t, { platform: 'win32', wslScanEnabled: true });
