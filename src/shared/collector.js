@@ -24,20 +24,23 @@ const { normalizeCustomScanPaths, customScanPathsFingerprint, tokscaleExtraDirsE
 const { TOKSCALE_CLIENT_ALIASES, tokscaleScanClientIds } = require('./tokscaleClientMapping');
 const {
   applyPeriodDelta,
+  applyProjectRollups,
   emptyPeriod,
   extractUsageBundleFromTokscale,
   mergePeriods,
   normalizeClientName,
   UNATTRIBUTED_USAGE_CLIENT
 } = require('./usage');
-const { collectWslUsage: collectWslUsageImpl, emptyWslBundle, probeWslState: probeWslStateImpl } = require('./wslUsage');
+const { collectWslUsage: collectWslUsageImpl, emptyWslBundle, probeWslState: probeWslStateImpl, discoverWslUsage } = require('./wslUsage');
 const { createWatcherHost } = require('./watcherHost');
 const { createSessionActivityScheduler } = require('./sessionActivityScheduler');
 const { activityWatchSources, activityClientsForPath, activityWatchIgnored } = require('./sessionActivityWatch');
 const { localDayKey, parseGraphResult, normalizeHistory, mergeHistories } = require('./history');
 const { retainDailyHistory, retainLiveDailyHistory, captureLiveDailyHistory, sourceSnapshotsFromGraphs, readDailyHistoryArchive, graphFromDailyHistoryArchive } = require('./dailyHistoryArchive');
 const { applySourceDailyUsage } = require('./usage/sourceDailyUsage');
-const { legacyCostsEqual } = require('./usage/sourceLedger');
+const sourceLedger = require('./usage/sourceLedger');
+const { legacyCostsEqual } = sourceLedger;
+const { periodIdentityStateFromSource, replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, historyIdentityFromLedger } = require('./usage/sourceIdentity');
 const { readSessionUsageArchiveEvidence } = require('./usage/sessionUsageArchiveStore');
 const {
   createSubprocessTermination,
@@ -219,7 +222,13 @@ function tokscaleCommand(options = {}) {
   const extraDirsEnv = customExtraDirs
     ? { ...process.env, TOKSCALE_EXTRA_DIRS: customExtraDirs }
     : process.env;
-  const env = tokscaleEnvWithBlanksDropped(extraDirsEnv, options.platform || process.platform);
+  let env = tokscaleEnvWithBlanksDropped(extraDirsEnv, options.platform || process.platform);
+  if (options.explicitHome) {
+    env = { ...env };
+    delete env.TOKSCALE_SCAN_ROOTS_JSON;
+  } else if (options.scanRoots) {
+    env = { ...env, TOKSCALE_SCAN_ROOTS_JSON: JSON.stringify(options.scanRoots) };
+  }
   const command = useDirect
     ? { bin: resolved.path, prefixArgs: [], env }
     : { bin: process.execPath, prefixArgs: [TOKSCALE_BIN_JS], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
@@ -443,6 +452,7 @@ function resetTokscaleCapabilityCache() {
   // Leaving it behind would keep a replaced binary pinned to the fallback grouping.
   tokscaleWorkspaceGroupBySupport.clear();
   tokscaleSourceSnapshotsSupport.clear();
+  tokscaleModelSourceSnapshotsSupport.clear();
 }
 
 // Exit code 2 alone is clap's generic "argument parsing failed" code, not a
@@ -462,6 +472,7 @@ const TOKSCALE_WORKSPACE_GROUP_BY = 'client,workspace,session,model';
 // and every later scan on the same binary starts with the grouping it accepts.
 const tokscaleWorkspaceGroupBySupport = new Map();
 const tokscaleSourceSnapshotsSupport = new Map();
+const tokscaleModelSourceSnapshotsSupport = new Map();
 
 function workspaceGroupBySupported(identity) {
   return tokscaleWorkspaceGroupBySupport.get(identity) !== false;
@@ -582,10 +593,12 @@ function runTokscale({
   onTerminationUnconfirmed,
   customScanPaths,
   homeDir,
-  workspaces = true
+  workspaces = true,
+  sourceSnapshots = false,
+  scanRoots
 }) {
   throwIfAborted(signal);
-  const command = tokscaleCommand({ customScanPaths, homeDir });
+  const command = tokscaleCommand({ customScanPaths, homeDir, scanRoots, explicitHome: flags.includes('--home') });
   const requested = tokscaleClientFilter(clients);
   if (!requested) return Promise.resolve({ entries: [] });
   const clientFilter = applyKnownCapabilityFilter(requested, command.identity);
@@ -601,7 +614,8 @@ function runTokscale({
   const groupBy = () => (workspaces && workspaceGroupBySupported(command.identity)
     ? TOKSCALE_WORKSPACE_GROUP_BY
     : TOKSCALE_SESSION_GROUP_BY);
-  const runArgs = (filter, grouping) => ['--json', '--client', filter, '--group-by', grouping, ...flags];
+  const runArgs = (filter, grouping) => ['--json', '--client', filter, '--group-by', grouping, ...flags,
+    ...(sourceSnapshots && tokscaleModelSourceSnapshotsSupport.get(command.identity) !== false ? ['--source-snapshots'] : [])];
   const subprocessOptions = {
     operation: 'tokscale scan',
     terminationOptions,
@@ -614,6 +628,11 @@ function runTokscale({
     signal,
     subprocessOptions
   ).catch((error) => {
+    if (sourceSnapshots && isUnknownTokscaleSourceSnapshotsError(error)) {
+      tokscaleModelSourceSnapshotsSupport.set(command.identity, false);
+      throwIfAborted(signal);
+      return spawnTokscaleJson(runArgs(filter, grouping), commandTimeoutMs, command, signal, subprocessOptions);
+    }
     if (!isUnknownTokscaleGroupByError(error)) return Promise.reject(error);
     tokscaleWorkspaceGroupBySupport.set(command.identity, false);
     throwIfAborted(signal);
@@ -623,7 +642,12 @@ function runTokscale({
       command,
       signal,
       subprocessOptions
-    );
+    ).catch(error => {
+      if (!sourceSnapshots || !isUnknownTokscaleSourceSnapshotsError(error)) return Promise.reject(error);
+      tokscaleModelSourceSnapshotsSupport.set(command.identity, false);
+      throwIfAborted(signal);
+      return spawnTokscaleJson(runArgs(filter, TOKSCALE_SESSION_GROUP_BY), commandTimeoutMs, command, signal, subprocessOptions);
+    });
   });
   return runCursorAwareTokscale(clientFilter, () => (
     scan(clientFilter).catch((error) => (
@@ -637,14 +661,14 @@ function runTokscale({
   ), signal);
 }
 
-function runTokscaleGraph({ clients, commandTimeoutMs, signal, terminationOptions, onTerminationUnconfirmed, customScanPaths, homeDir, sourceSnapshots = false }) {
+function runTokscaleGraph({ clients, commandTimeoutMs, signal, terminationOptions, onTerminationUnconfirmed, customScanPaths, homeDir, sourceSnapshots = false, scanRoots, flags = [] }) {
   throwIfAborted(signal);
-  const command = tokscaleCommand({ customScanPaths, homeDir });
+  const command = tokscaleCommand({ customScanPaths, homeDir, scanRoots, explicitHome: flags.includes('--home') });
   const requested = tokscaleClientFilter(clients);
   if (!requested) return Promise.resolve({ contributions: [] });
   const clientFilter = applyKnownCapabilityFilter(requested, command.identity);
   if (!clientFilter) return Promise.resolve({ contributions: [] });
-  const runArgs = (filter) => ['graph', '--client', filter, '--no-spinner',
+  const runArgs = (filter) => ['graph', '--client', filter, ...flags, '--no-spinner',
     ...(sourceSnapshots && tokscaleSourceSnapshotsSupport.get(command.identity) !== false ? ['--source-snapshots'] : [])];
   const subprocessOptions = {
     operation: 'tokscale graph',
@@ -914,7 +938,8 @@ async function collectHistoryOnce(options) {
     try {
       const graphJson = await runGraph({
         clients,
-        sourceSnapshots: options.dailyHistoryArchiveEnabled === true,
+        sourceSnapshots: true,
+        scanRoots: options.scanRoots,
         commandTimeoutMs: options.commandTimeoutMs || HISTORY_TIMEOUT_MS,
         signal: options.signal
       });
@@ -922,6 +947,28 @@ async function collectHistoryOnce(options) {
       rawGraphs.push(graphJson);
       options.onSourceUsage?.(graphJson.sourceUsage);
       liveHistory = normalizeHistory(parseGraphResult(graphJson), { capDays, todayKey });
+      // Graph inclusion is independent of each ModelReport's acknowledgement.
+      // An older graph reader may ignore the extra roots even when native
+      // period scans support them. Keep its isolated original usage additive.
+      const roots = options.wslDiscovery?.claudeRoots || [];
+      if (roots.length && !sourceRootsAcknowledged(graphJson.sourceUsage, roots)) {
+        const parts = [liveHistory];
+        for (const home of options.wslDiscovery.homes || []) {
+          try {
+            const isolated = await runGraph({ clients: 'claude', flags: ['--home', home], sourceSnapshots: true,
+              commandTimeoutMs: options.commandTimeoutMs || HISTORY_TIMEOUT_MS, signal: options.signal });
+            throwIfAborted(options.signal);
+            rawGraphs.push(isolated);
+            parts.push(normalizeHistory(parseGraphResult(isolated), { capDays, todayKey }));
+          } catch (error) {
+            if (options.signal?.aborted) throw abortReason(options.signal);
+            failureCode = 'history-wsl-graph-failed';
+            options.onDiagnosticEvent?.({ subsystem: 'collector', code: failureCode });
+            options.logger?.(`WSL Claude history graph failed: ${error.message}`);
+          }
+        }
+        liveHistory = mergeHistories(parts, { capDays, todayKey });
+      }
     } catch (error) {
       if (options.signal?.aborted) throw abortReason(options.signal);
       failureCode = 'history-graph-failed';
@@ -986,6 +1033,7 @@ async function collectHistoryOnce(options) {
     return withLocalHistory(null);
   }
   const result = liveHistory.daily.length || liveHistory.monthly.length ? liveHistory : null;
+  if (result && failureCode === null && rawGraphs.length === 1) options.onHistoryIdentitySource?.(rawGraphs[0]);
   reportStatus(failureCode === null);
   return withLocalHistory(result);
 }
@@ -995,6 +1043,43 @@ function shouldIncludeHistory(nowMs, lastHistoryAtMs, historyIntervalMs, force, 
   if (force) return true;
   return nowMs - (lastHistoryAtMs || 0) >= historyIntervalMs;
 }
+function normalizedScanRoots(value) {
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch (_) { return {}; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.keys(value).sort().flatMap(client => {
+    if (!Array.isArray(value[client])) return [];
+    const roots = [...new Set(value[client].filter(root => typeof root === 'string'
+      && (path.isAbsolute(root) || path.win32.isAbsolute(root))))].sort();
+    return roots.length ? [[client, roots]] : [];
+  }));
+}
+
+function configuredScanRoots(options) {
+  return normalizedScanRoots(options.scanRoots || (options.env || process.env).TOKSCALE_SCAN_ROOTS_JSON);
+}
+
+function withWslClaudeRoots(configured, discovery, enabled) {
+  const roots = normalizedScanRoots(configured);
+  if (enabled && discovery?.claudeRoots?.length) {
+    roots.claude = [...new Set([...(roots.claude || []), ...discovery.claudeRoots])].sort();
+  }
+  return normalizedScanRoots(roots);
+}
+
+function sourceRootsAcknowledged(source, roots) {
+  return source?.version === 2 && source.eventIdentityVersion === 2
+    && Array.isArray(source.scanRoots?.claude) && roots.every(root => source.scanRoots.claude.includes(root));
+}
+
+function collectorIdentityFingerprint(options, roots) {
+  return JSON.stringify([normalizeClientsCsv(options.clients), options.allTimeSince,
+    options.projectsEnabled !== false, options.wslScanEnabled !== false,
+    customScanPathsFingerprint(options.customScanPaths), options.pricingRevision ?? pricingFingerprint(options),
+    collectorTimeZone(options), configuredScanRoots(options), normalizedScanRoots(roots)]);
+}
+
 async function collectUsageOnce(options) {
   throwIfAborted(options.signal);
   const { clients, allTimeSince, commandTimeoutMs, deviceId, agentVersion = appVersion(), agentRuntime = '' } = options;
@@ -1026,17 +1111,28 @@ async function collectUsageOnce(options) {
     onTerminationUnconfirmed: () => reportTerminationUnconfirmed('tokscale-scan')
   }));
   const runTokscaleFn = async (input) => {
-    const json = await runTokscaleScan(input);
-    applyTokscaleSessionMetadata(json, { resolveProjects: projectsEnabled });
-    return json;
+    const json = await runTokscaleScan({ ...input, sourceSnapshots: true,
+      scanRoots: input.flags?.includes('--home') ? undefined : scanRoots });
+    const { sourceUsage: exportedSource, ...report } = json;
+    const sourceUsage = discoveryReadEvidence(exportedSource);
+    applyTokscaleSessionMetadata(report, { resolveProjects: projectsEnabled });
+    // Deep-walking the report must never discover source observations as a
+    // second aggregate row. Non-enumerable evidence remains available locally.
+    Object.defineProperty(report, 'sourceUsage', { value: sourceUsage, enumerable: false });
+    return report;
   };
-  const runGraphFn = options.runGraph || ((input) => runTokscaleGraph({
+  const runGraphScan = options.runGraph || ((input) => runTokscaleGraph({
     ...input,
     customScanPaths: options.customScanPaths,
     homeDir: options.homeDir,
     terminationOptions: options.subprocessTerminationOptions,
     onTerminationUnconfirmed: () => reportTerminationUnconfirmed('tokscale-graph')
   }));
+  const runGraphFn = async input => {
+    const graph = await runGraphScan({ ...input, sourceSnapshots: true,
+      scanRoots: input.flags?.includes('--home') ? undefined : scanRoots });
+    return graph.sourceUsage ? { ...graph, sourceUsage: discoveryReadEvidence(graph.sourceUsage) } : graph;
+  };
   const collectWsl = options.collectWslUsage || collectWslUsageImpl;
   const probeWslStateFn = options.probeWslState || probeWslStateImpl;
   // Injectable only for the WSL-status gate, so tests can exercise the win32
@@ -1088,12 +1184,48 @@ async function collectUsageOnce(options) {
   const nativeRawPresence = {};
   const captureRawPartitions = Boolean(options.dailyHistoryArchiveEnabled);
   const anchor = options.todayOnlyAnchor;
+  const combinedWslClaude = platformValue === 'win32' && trackedClientSet.has('claude') && options.wslScanEnabled !== false;
+  const configuredRoots = configuredScanRoots(options);
+  const cachedScanRoots = withWslClaudeRoots(configuredRoots, anchor?.wslDiscovery, combinedWslClaude);
+  const preliminaryAnchor = Boolean((!anchor?.identityFingerprint || anchor.identityFingerprint === collectorIdentityFingerprint(options, cachedScanRoots))
+    && anchor && anchor.dateKey === todayKey && canTargetTodayPartitions(anchor, targetClients)
+    && (anchor.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone) === timeZone);
+  let wslDiscovery = combinedWslClaude && preliminaryAnchor ? anchor.wslDiscovery : null;
+  if (combinedWslClaude && (!preliminaryAnchor || !wslDiscovery || options.refreshWsl)) {
+    wslDiscovery = (options.discoverWslUsage || discoverWslUsage)({ ...(options.wslDeps || {}), platform: platformValue });
+  }
+  if (wslDiscovery?.diagnostics?.length) {
+    const previous = anchor?.wslDiscovery || options.wslDiscoveryFallback;
+    if (previous) wslDiscovery = { ...wslDiscovery,
+      homes: [...new Set([...wslDiscovery.homes, ...previous.homes])],
+      clientsByHome: { ...previous.clientsByHome, ...wslDiscovery.clientsByHome },
+      claudeRoots: [...new Set([...wslDiscovery.claudeRoots, ...previous.claudeRoots])].sort() };
+  }
+  const discoveryReadEvidence = source => {
+    if (!source || !wslDiscovery?.diagnostics?.length) return source;
+    // The native reader cannot certify an inventory that discovery failed to
+    // enumerate. This rejection preserves #1000's accepted accounting.
+    return { ...source, partialClients: [...new Set([...(source.partialClients || []), 'claude'])],
+      scopes: (source.scopes || []).map(scope => scope.clients?.includes('claude') ? { ...scope, readStatus: 'unknown' } : scope) };
+  };
+  const scanRoots = withWslClaudeRoots(configuredRoots, wslDiscovery, combinedWslClaude);
+  const identityFingerprint = collectorIdentityFingerprint(options, scanRoots);
+  const identityConfigMatches = !anchor?.identityFingerprint || anchor.identityFingerprint === identityFingerprint;
   const anchorUsed = Boolean(
     anchor
     && (anchor.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone) === timeZone
     && anchor.dateKey === todayKey
+    && identityConfigMatches
+    && (!combinedWslClaude || anchor.wslDiscovery && JSON.stringify(anchor.scanRoots) === JSON.stringify(scanRoots))
     && canTargetTodayPartitions(anchor, targetClients)
   );
+  const nativeIdentityState = anchorUsed && identityConfigMatches
+    ? { ...anchor.nativeIdentityState, today: anchor.todayIdentityState ?? anchor.nativeIdentityState?.today } : {};
+  const nativeSources = {};
+  const captureIdentity = (name, json, period) => {
+    nativeSources[name] = json.sourceUsage;
+    nativeIdentityState[name] = periodIdentityStateFromSource(json.sourceUsage, period, { timeZone, todayKey, allTimeSince, periodName: name });
+  };
   // Full-scan rows are native, even when their title matches an old override.
   // Retain their fallback through the progressive metadata passes this tick.
   if (!anchorUsed) localSessionMetadataDeps.scanTitleFallbacks = new WeakMap();
@@ -1147,6 +1279,7 @@ async function collectUsageOnce(options) {
         const todayJson = await runTokscaleFn({ clients: scanClients, flags: ['--today'], commandTimeoutMs, signal: options.signal });
         throwIfAborted(options.signal);
         const bundle = extractUsageBundleFromTokscale(todayJson);
+        if (!targetRequested || targetClientSet.has('claude')) captureIdentity('today', todayJson, bundle.period);
         freshPartitions = bundle.byClient;
         if (captureRawPartitions) freshRawPresence = rawPartitionPresence(rawTokscalePartitions(todayJson, bundle.period));
         const unattributed = freshPartitions[UNATTRIBUTED_USAGE_CLIENT];
@@ -1173,6 +1306,7 @@ async function collectUsageOnce(options) {
           const fullTodayJson = await runTokscaleFn({ clients: normalizedClients, flags: ['--today'], commandTimeoutMs, signal: options.signal });
           throwIfAborted(options.signal);
           const fullTodayBundle = extractUsageBundleFromTokscale(fullTodayJson);
+          captureIdentity('today', fullTodayJson, fullTodayBundle.period);
           freshPartitions = fullTodayBundle.byClient;
           if (captureRawPartitions) freshRawPresence = rawPartitionPresence(rawTokscalePartitions(fullTodayJson, fullTodayBundle.period));
           useTargetedPartitions = false;
@@ -1192,6 +1326,9 @@ async function collectUsageOnce(options) {
             localSessionMetadataDeps.catalogProjectRows.add(session);
           }
         }
+      }
+      for (const name of ['month', 'allTime']) {
+        nativeIdentityState[name] = replaceIdentityToday(anchor.nativeIdentityState?.[name], nativeIdentityState.today, todayKey);
       }
       month = applyPeriodDelta(anchor.month, today, anchor.today);
       allTime = applyPeriodDelta(anchor.allTime, today, anchor.today);
@@ -1213,6 +1350,7 @@ async function collectUsageOnce(options) {
       throwIfAborted(options.signal);
       const todayBundle = extractUsageBundleFromTokscale(todayJson);
       today = todayBundle.period;
+      captureIdentity('today', todayJson, today);
       todayPartitions = todayBundle.byClient;
       if (captureRawPartitions) nativeRawPartitions.today = rawTokscalePartitions(todayJson, today);
       if (typeof options.onProgress === 'function') decorateLocalPeriods({ today });
@@ -1221,6 +1359,7 @@ async function collectUsageOnce(options) {
       throwIfAborted(options.signal);
       const monthBundle = extractUsageBundleFromTokscale(monthJson);
       month = monthBundle.period;
+      captureIdentity('month', monthJson, month);
       nativePartitions.month = monthBundle.byClient;
       if (captureRawPartitions) nativeRawPartitions.month = rawTokscalePartitions(monthJson, month);
       if (typeof options.onProgress === 'function') decorateLocalPeriods({ today, month });
@@ -1229,6 +1368,7 @@ async function collectUsageOnce(options) {
       throwIfAborted(options.signal);
       const allTimeBundle = extractUsageBundleFromTokscale(allTimeJson);
       allTime = allTimeBundle.period;
+      captureIdentity('allTime', allTimeJson, allTime);
       nativePartitions.allTime = allTimeBundle.byClient;
       if (captureRawPartitions) nativeRawPartitions.allTime = rawTokscalePartitions(allTimeJson, allTime);
     }
@@ -1284,6 +1424,32 @@ async function collectUsageOnce(options) {
   //    and watch ticks fire every few seconds.
   // 3. !anchorUsed (full scan): scan WSL as part of the complete rescan.
   const windowsPeriods = { today, month, allTime };
+  const claudeNativeScanned = Object.hasOwn(nativeSources, 'today');
+  const nativeClaudeComplete = source => source?.version === 2 && source.eventIdentityVersion === 2
+    && source.scopes?.some(scope => scope.clients?.includes('claude') && scope.readStatus === 'complete' && scope.identityStatus === 'exact')
+    && !source.scopes.some(scope => scope.clients?.includes('claude') && (scope.readStatus !== 'complete' || scope.identityStatus !== 'exact'))
+    && !source.partialClients?.includes('claude');
+  const claudeReadBlocked = Boolean(anchorUsed && (anchor.claudeReadBlocked
+    || claudeNativeScanned && (anchor.claudeIncludedInNative && !sourceRootsAcknowledged(nativeSources.today, wslDiscovery?.claudeRoots || [])
+      || nativeSources.today && !nativeClaudeComplete(nativeSources.today)
+      || anchor.nativeIdentityState?.today && !nativeSources.today)));
+  if (claudeReadBlocked && !options.dailyHistoryArchiveEnabled && anchor.todayPartitions?.claude) {
+    todayPartitions.claude = anchor.todayPartitions.claude;
+    windowsPeriods.today = mergeTodayPartitions(todayPartitions);
+    windowsPeriods.month = applyPeriodDelta(anchor.month, windowsPeriods.today, anchor.today);
+    windowsPeriods.allTime = applyPeriodDelta(anchor.allTime, windowsPeriods.today, anchor.today);
+    for (const name of ['today', 'month', 'allTime']) nativeIdentityState[name] = anchor.nativeIdentityState?.[name] || null;
+  }
+  const claudeIncludedInNativePeriods = Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
+    combinedWslClaude && wslDiscovery?.claudeRoots?.length > 0 && sourceRootsAcknowledged(nativeSources[name], wslDiscovery.claudeRoots)]));
+  const applyAcceptedSourceUsage = (summary, sourceUsage, inputs) => {
+    const locked = claudeReadBlocked ? { ...sourceUsage, scopes: (sourceUsage?.scopes || []).map(scope =>
+      scope.clients?.includes('claude') ? { ...scope, blockNativeWatch: true } : scope) } : sourceUsage;
+    applySourceDailyUsage(summary, locked, inputs);
+  };
+  const claudeIncludedInNative = combinedWslClaude && wslDiscovery?.claudeRoots?.length > 0
+    && (anchorUsed ? anchor.claudeIncludedInNative === true && (!nativeSources.today || sourceRootsAcknowledged(nativeSources.today, wslDiscovery.claudeRoots))
+      : ['today', 'month', 'allTime'].every(name => sourceRootsAcknowledged(nativeSources[name], wslDiscovery.claudeRoots)));
   let wslBundle = emptyWslBundle();
   let wslDetected = [];
   if (normalizedClients && options.wslScanEnabled !== false) {
@@ -1291,13 +1457,16 @@ async function collectUsageOnce(options) {
       const wslResult = await collectWsl({
         clients: normalizedClients,
         trackedClients: normalizedClients,
+        discovery: wslDiscovery,
+        claudeIncludedInNative,
+        claudeIncludedInNativePeriods,
         allTimeSince,
         commandTimeoutMs,
         signal: options.signal,
         runTokscale: runTokscaleFn,
         logger: options.logger,
         decoratePeriods: (periods, home) => applySessionMetadata(periods, home, { scopedHome: true, resolveProjects: projectsEnabled })
-      });
+      }, options.wslDeps);
       wslBundle = wslResult.bundle;
       wslDetected = wslResult.detected;
     } else if (anchorUsed && options.wslAnchor) {
@@ -1306,13 +1475,16 @@ async function collectUsageOnce(options) {
       const wslResult = await collectWsl({
         clients: normalizedClients,
         trackedClients: normalizedClients,
+        discovery: wslDiscovery,
+        claudeIncludedInNative,
+        claudeIncludedInNativePeriods,
         allTimeSince,
         commandTimeoutMs,
         signal: options.signal,
         runTokscale: runTokscaleFn,
         logger: options.logger,
         decoratePeriods: (periods, home) => applySessionMetadata(periods, home, { scopedHome: true, resolveProjects: projectsEnabled })
-      });
+      }, options.wslDeps);
       wslBundle = wslResult.bundle;
       wslDetected = wslResult.detected;
     }
@@ -1365,13 +1537,18 @@ async function collectUsageOnce(options) {
     } else if (reuseFrozen) {
       wslStatus = options.wslStatus;
     } else {
-      const probe = probeWslStateFn({});
+      const probe = options.probeWslState ? probeWslStateFn({}) : wslDiscovery?.state || probeWslStateFn({});
       if (probe !== 'ok') {
         wslStatus = { state: probe, detected: [], withData: [] };
       } else {
         const withData = Object.keys(wslBundle.allTime.clients || {});
+        if (anchorUsed && claudeIncludedInNative && options.wslStatus?.withData?.includes('claude')) withData.push('claude');
+        if (claudeIncludedInNative && nativeSources.allTime?.rootUsage?.some(row => row.client === 'claude'
+          && wslDiscovery.claudeRoots.includes(row.root) && row.readStatus === 'complete'
+          && Number.isFinite(row.tokens) && row.tokens > 0) && !withData.includes('claude')) withData.push('claude');
         const state = withData.length > 0 ? 'active' : 'no-data';
-        wslStatus = { state, detected: wslDetected, withData };
+        wslStatus = { state, detected: wslDetected, withData,
+          ...(wslDiscovery?.diagnostics?.length ? { diagnostics: wslDiscovery.diagnostics } : {}) };
       }
     }
   }
@@ -1419,6 +1596,8 @@ async function collectUsageOnce(options) {
     wslDetected: wslStatus?.detected
   });
 
+  let acceptedSourceProjection = null;
+  let liveHistoryIdentityLedger = null;
   const summary = {
     deviceId,
     hostname: os.hostname(),
@@ -1469,41 +1648,6 @@ async function collectUsageOnce(options) {
       summary.nativeProjects = empty.projects;
     }
   }
-  if (typeof options.onAnchorComputed === 'function') {
-    // Reuse the existing catalog-title ledger (historically named t3Titles)
-    // for summary overrides too. Provenance never enters published rows.
-    const t3Titles = { ...localSessionMetadataDeps.t3Titles };
-    for (const key of localSessionMetadataDeps.invalidatedTitleKeys) t3Titles[key] = null;
-    for (const [key, meta] of localSessionMetadataDeps.metadataCache) {
-      if (meta.t3Title || meta.catalogTitle) t3Titles[key] = meta.t3Title || meta.catalogTitle;
-    }
-    const catalogTitleSources = { ...localSessionMetadataDeps.catalogTitleSources };
-    for (const [key, meta] of localSessionMetadataDeps.metadataCache) {
-      if (meta.catalogTitleSource) catalogTitleSources[key] = meta.catalogTitleSource;
-    }
-    const catalogProjects = localSessionMetadataDeps.catalogProjects;
-    for (const period of ['today', 'month', 'allTime']) {
-      for (const [key, id] of Object.entries(catalogProjects[period])) {
-        const label = windowsPeriods[period]?.sessions?.[key]?.projectLabel;
-        if (label) catalogProjects.labels[id] = label;
-      }
-    }
-    options.onAnchorComputed({
-      sessionIdentityVersion: sessionIdentitiesComplete ? SESSION_IDENTITY_VERSION : (anchor?.sessionIdentityVersion || 1),
-      windowsPeriods,
-      timeZone,
-      dateKey: todayKey,
-      todayPartitions,
-      nativeRawPresence,
-      t3Titles,
-      catalogTitleSources,
-      catalogProjects,
-      wslBundle,
-      wslStatus,
-      ...(summary.nativeSessions ? { nativeSessions: summary.nativeSessions } : {}),
-      ...(summary.nativeProjects ? { nativeProjects: summary.nativeProjects } : {})
-    });
-  }
   if (options.historyEnabled === false) {
     summary.history = null;
   } else if (options.includeHistory) {
@@ -1511,6 +1655,9 @@ async function collectUsageOnce(options) {
     let capturedSourceSnapshots = new Map();
     const history = await collectHistoryOnce({
       clients: normalizedClients,
+      scanRoots,
+      wslDiscovery: combinedWslClaude ? wslDiscovery : null,
+      onDiagnosticEvent: options.onDiagnosticEvent,
       codexLocalGraph: codexLocalView?.graph || null,
       historyEnabled: options.historyEnabled,
       commandTimeoutMs: options.historyTimeoutMs,
@@ -1532,14 +1679,21 @@ async function collectUsageOnce(options) {
         : [...new Set(Object.values(nativeRawPartitions).flatMap(partitions => Object.keys(partitions)))],
       nativePeriods: windowsPeriods,
       sourcePaths,
+      onHistoryIdentitySource: (graph) => {
+        // Retention is disabled: this full graph supplies the exact History
+        // being published, with no persistent retained boundary to migrate.
+        // The ledger validates completeness; partial scopes grant no claims.
+        liveHistoryIdentityLedger = sourceLedger.captureSourceLedger(undefined, [graph], { retainedBoundaryChecked: true }).ledger;
+      },
       onSourceUsage: (sourceUsage) => {
         capturedSourceSnapshots = sourceSnapshotsFromGraphs({ sourceUsage });
       },
       onRetainedSourceUsage: (sourceUsage) => {
+        acceptedSourceProjection = sourceUsage;
         options.onSourceArchiveComputed?.(sourceUsage);
         // The App ledger decides acceptance and owns the retained counters.
         // Scanner metadata supplies inventory, never a second authority vote.
-        applySourceDailyUsage(summary, sourceUsage, {
+        applyAcceptedSourceUsage(summary, sourceUsage, {
           todayKey, timeZone, allTimeSince,
           replaceLive: !anchorUsed, nativePartitions, nativeRawPartitions, nativeRawPresence, nativePeriods: windowsPeriods,
           nativeAnchor: anchorUsed ? anchor : null, clients: normalizedClients,
@@ -1573,8 +1727,9 @@ async function collectUsageOnce(options) {
       const sourceUsage = options.sourceArchiveSnapshot
         || graphFromDailyHistoryArchive([], readDailyHistoryArchive(options.dailyHistoryArchiveOptions || {}), { timeZone }).sourceUsage
         || { version: 2, accountingOwner: 'app', ownedClients: [], managedKeys: [], sessions: [] };
+      acceptedSourceProjection = sourceUsage;
       options.onSourceArchiveComputed?.(sourceUsage);
-      applySourceDailyUsage(summary, sourceUsage, {
+      applyAcceptedSourceUsage(summary, sourceUsage, {
         todayKey, timeZone, allTimeSince, clients: normalizedClients,
         nativePeriods: windowsPeriods, nativePartitions, nativeRawPartitions, nativeRawPresence, nativeAnchor: anchorUsed ? anchor : null,
         supplementalPeriods: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
@@ -1586,6 +1741,72 @@ async function collectUsageOnce(options) {
     } catch (error) {
       options.logger?.(`daily source archive read failed: ${error.message}`);
     }
+  }
+  if (projectsEnabled) applyProjectRollups(summary);
+  let acceptedIdentityState = nativeIdentityState;
+  const ledger = sourceLedger.getSourceLedger?.(acceptedSourceProjection);
+  if (acceptedSourceProjection?.ownedClients?.includes('claude')) {
+    // Accepted accounting may retain a different revision despite equal totals.
+    // Never use a fresh scan's claims as proof for that retained revision.
+    const locked = claudeReadBlocked || acceptedSourceProjection.scopes?.some(scope => scope.clients?.includes('claude') && scope.blockNativeWatch);
+    if (!anchorUsed || locked) acceptedIdentityState = ledger
+      ? identityStateFromLedger(ledger, summary, { timeZone, todayKey, allTimeSince }) : {};
+  }
+  for (const diagnostic of wslDiscovery?.diagnostics || []) {
+    try { options.onDiagnosticEvent?.({ subsystem: 'collector', ...diagnostic }); } catch (_) { /* observer only */ }
+    options.logger?.(`${diagnostic.code}: ${diagnostic.detailCode}`);
+  }
+  if (combinedWslClaude && Object.values(nativeSources).some(source => source?.scopes?.some(scope => scope.clients?.includes('claude')
+    && scope.readStatus !== 'complete'))) {
+    try { options.onDiagnosticEvent?.({ subsystem: 'collector', code: 'wsl-claude-read-incomplete' }); } catch (_) { /* observer only */ }
+  }
+  const usageIdentity = usageIdentityFromState(acceptedIdentityState, summary);
+  const historyLedger = ledger || liveHistoryIdentityLedger;
+  const historyIdentity = summary.history && historyLedger ? historyIdentityFromLedger(historyLedger, { timeZone, history: summary.history }) : null;
+  if (usageIdentity || historyIdentity) summary.usageIdentity = {
+    ...(usageIdentity || { version: 1, eventIdentityVersion: 2, periods: {} }),
+    ...(historyIdentity ? { history: historyIdentity } : {})
+  };
+  if (typeof options.onAnchorComputed === 'function') {
+    // Reuse the existing catalog-title ledger (historically named t3Titles)
+    // for summary overrides too. Provenance never enters published rows.
+    const t3Titles = { ...localSessionMetadataDeps.t3Titles };
+    for (const key of localSessionMetadataDeps.invalidatedTitleKeys) t3Titles[key] = null;
+    for (const [key, meta] of localSessionMetadataDeps.metadataCache) {
+      if (meta.t3Title || meta.catalogTitle) t3Titles[key] = meta.t3Title || meta.catalogTitle;
+    }
+    const catalogTitleSources = { ...localSessionMetadataDeps.catalogTitleSources };
+    for (const [key, meta] of localSessionMetadataDeps.metadataCache) {
+      if (meta.catalogTitleSource) catalogTitleSources[key] = meta.catalogTitleSource;
+    }
+    const catalogProjects = localSessionMetadataDeps.catalogProjects;
+    for (const period of ['today', 'month', 'allTime']) {
+      for (const [key, id] of Object.entries(catalogProjects[period])) {
+        const label = windowsPeriods[period]?.sessions?.[key]?.projectLabel;
+        if (label) catalogProjects.labels[id] = label;
+      }
+    }
+    options.onAnchorComputed({
+      identityFingerprint,
+      scanRoots,
+      wslDiscovery,
+      claudeIncludedInNative,
+      claudeReadBlocked,
+      nativeIdentityState: acceptedIdentityState,
+      sessionIdentityVersion: sessionIdentitiesComplete ? SESSION_IDENTITY_VERSION : (anchor?.sessionIdentityVersion || 1),
+      windowsPeriods,
+      timeZone,
+      dateKey: todayKey,
+      todayPartitions,
+      nativeRawPresence,
+      t3Titles,
+      catalogTitleSources,
+      catalogProjects,
+      wslBundle,
+      wslStatus,
+      ...(summary.nativeSessions ? { nativeSessions: summary.nativeSessions } : {}),
+      ...(summary.nativeProjects ? { nativeProjects: summary.nativeProjects } : {})
+    });
   }
   // After history, so `lastActivityDay` can come from the daily buckets this
   // scan already produced rather than from a second source of truth.
@@ -1650,6 +1871,12 @@ function clientWatchCandidates(clientsCsv, options = {}) {
       ))
       .map((root) => root.dir);
   }
+  const enabled = new Set(normalizeClientsCsv(clientsCsv).split(','));
+  for (const [client, roots] of Object.entries(configuredScanRoots(options))) {
+    if (enabled.has(client) && !SELF_SYNCED_CLIENTS.has(client)) {
+      byClient[client] = [...new Set([...(byClient[client] || []), ...roots])];
+    }
+  }
   return byClient;
 }
 
@@ -1691,6 +1918,7 @@ function antigravitySummaryWatchSources(options = {}) {
 
 function watchClientRootsForClients(clientsCsv, options = {}) {
   const rootsByClient = {};
+  const scanRoots = configuredScanRoots(options);
   const customScanPaths = normalizeCustomScanPaths(options.customScanPaths, {
     platform: options.platform || process.platform
   });
@@ -1700,7 +1928,10 @@ function watchClientRootsForClients(clientsCsv, options = {}) {
     const candidates = SELF_SYNCED_CLIENTS.has(client)
       ? dirs.filter((dir) => customScanPaths[client]?.includes(dir))
       : dirs;
-    const existing = [...new Set(candidates.filter(dirExists))];
+    // Acknowledged scan roots remain watch targets even if a network mount is
+    // temporarily unreachable. Admission and safe polling handle that failure;
+    // a path-presence probe must not silently discard the original source.
+    const existing = [...new Set(candidates.filter(dir => scanRoots[client]?.includes(dir) || dirExists(dir)))];
     if (existing.length > 0) rootsByClient[client] = existing;
   }
   for (const [client, dirs] of Object.entries(selfSyncSourceRootsForClients(clientsCsv, options))) {
@@ -2416,8 +2647,12 @@ function configFingerprint(clientsCsv, allTimeSince, projectsEnabled = true, qod
   // common case.
   const scanKey = customScanPathsFingerprint(customScanPaths);
   const scanPart = scanKey ? `|scan:${scanKey}` : '';
+  const configuredRoots = configuredScanRoots(sourceOptions);
+  const rootsPart = Object.keys(configuredRoots).length ? `|roots:${JSON.stringify(configuredRoots)}` : '';
+  const wslPart = (sourceOptions.platform || process.platform) === 'win32' && normalizeClientsCsv(clientsCsv).split(',').includes('claude')
+    ? `|wslClaude:${sourceOptions.wslScanEnabled !== false ? 'on' : 'off'}|wslRoots:${JSON.stringify(sourceOptions.wslDiscovery?.claudeRoots || [])}` : '';
   const catpawPart = catpawRevision ? `|catpaw:${catpawRevision}` : '';
-  return `${normalizeClientsCsv(clientsCsv)}|${allTimeSince}|projects:${projectsEnabled !== false ? 'on' : 'off'}${qoderCnPart}${qoderCnProjectsPart}${scanPart}${catpawPart}|pricing:${pricingRevision}|bucket:${timezoneFingerprint()}`;
+  return `${normalizeClientsCsv(clientsCsv)}|${allTimeSince}|projects:${projectsEnabled !== false ? 'on' : 'off'}${qoderCnPart}${qoderCnProjectsPart}${scanPart}${catpawPart}${rootsPart}${wslPart}|pricing:${pricingRevision}|bucket:${timezoneFingerprint()}`;
 }
 
 function qoderCnSourcesForClients(clientsCsv, options = {}) {
@@ -2616,6 +2851,7 @@ const WATCH_REFUSAL_CODES = new Set([WATCH_POLLING_LIMIT_CODE, WATCH_POLLING_UNA
 // confirmed its exit), and a check the host can route around bounds nothing.
 function openWatch(chokidar, config = {}) {
   const ignored = activityWatchIgnored(watchIgnoreMatcher(config.clients, {
+    scanRoots: config.scanRoots,
     customScanPaths: config.customScanPaths,
     cursorDesktopRoots: config.cursorDesktopRoots,
     homeDir: config.homeDir,
@@ -2740,7 +2976,9 @@ function startCollector(options) {
     customScanPaths: options.customScanPaths,
     env: options.env || options.sessionMetadataDeps?.env,
     homeDir: options.homeDir,
-    platform: options.platform
+    platform: options.platform,
+    wslScanEnabled: options.wslScanEnabled,
+    scanRoots: options.scanRoots
   };
   const qoderCnSources = qoderCnSourcesForClients(normalizedClients, {
     homeDir: options.homeDir,
@@ -2782,6 +3020,10 @@ function startCollector(options) {
   let timezoneRevision = timezoneFingerprint(collectionDate(options.now), options);
   let wslAnchor = null;
   let wslStatusAnchor = null;
+  let initialWslDiscovery = (sourceOptions.platform || process.platform) === 'win32' && normalizedClients.split(',').includes('claude')
+    && options.wslScanEnabled !== false
+    ? (options.discoverWslUsage || discoverWslUsage)({ ...(options.wslDeps || {}), platform: 'win32' }) : null;
+  sourceOptions.wslDiscovery = initialWslDiscovery;
   // The last-activity days a history refresh produced, carried across the ticks
   // that skip history. Read back out of the record this collector just published
   // rather than kept as a second copy, so the two cannot drift; a restart simply
@@ -2924,6 +3166,13 @@ function startCollector(options) {
           dateKey: saved.dateKey,
           timeZone: saved.timeZone,
           sessionIdentityVersion: saved.sessionIdentityVersion,
+          identityFingerprint: saved.identityFingerprint,
+          scanRoots: saved.scanRoots,
+          wslDiscovery: saved.wslDiscovery,
+          claudeIncludedInNative: saved.claudeIncludedInNative,
+          claudeReadBlocked: saved.claudeReadBlocked,
+          nativeIdentityState: saved.nativeIdentityState,
+          todayIdentityState: saved.todayIdentityState,
           today: saved.today,
           month: saved.month,
           allTime: saved.allTime,
@@ -2959,6 +3208,13 @@ function startCollector(options) {
         dateKey: anchor.dateKey,
         timeZone: anchor.timeZone,
         sessionIdentityVersion: anchor.sessionIdentityVersion,
+        identityFingerprint: anchor.identityFingerprint,
+        scanRoots: anchor.scanRoots,
+        wslDiscovery: anchor.wslDiscovery,
+        claudeIncludedInNative: anchor.claudeIncludedInNative,
+        claudeReadBlocked: anchor.claudeReadBlocked,
+        nativeIdentityState: anchor.nativeIdentityState,
+        todayIdentityState: anchor.todayIdentityState,
         cursorAutoModelVersion: 1,
         today: anchor.today,
         month: anchor.month,
@@ -3041,7 +3297,7 @@ function startCollector(options) {
     // is not due yet, so fixed ranges never wait for the next scheduled graph.
     const localDayRolledOver = Boolean(anchor?.dateKey && anchor.dateKey !== todayKey);
     if (localDayRolledOver && historyEnabled) rolloverHistoryPending = true;
-    const includeHistory = shouldIncludeHistory(
+    let includeHistory = shouldIncludeHistory(
       collectedAt.getTime(),
       lastHistoryAt,
       historyIntervalMs,
@@ -3055,7 +3311,14 @@ function startCollector(options) {
     let historyScanSucceeded = !includeHistory;
     const requestedTargetClients = [...new Set(normalizeClientsCsv(tickOptions.targetClients).split(',').filter(Boolean))];
     const targetAnchorReady = canTargetTodayPartitions(anchor, requestedTargetClients);
-    const anchored = Boolean(tickOptions.todayOnly && anchor && anchor.dateKey === todayKey
+    let rootsChanged = false;
+    if (tickOptions.refreshWsl && (sourceOptions.platform || process.platform) === 'win32' && trackedClients.has('claude') && options.wslScanEnabled !== false) {
+      initialWslDiscovery = initialWslDiscovery || (options.discoverWslUsage || discoverWslUsage)({ ...(options.wslDeps || {}), platform: 'win32' });
+      sourceOptions.wslDiscovery = initialWslDiscovery;
+      rootsChanged = JSON.stringify(anchor?.wslDiscovery?.claudeRoots || []) !== JSON.stringify(initialWslDiscovery.claudeRoots);
+    }
+    if (rootsChanged && historyEnabled !== false) { includeHistory = true; lastHistoryAt = collectedAt.getTime(); lastHistoryAttemptAt = tickStartedAt; }
+    const anchored = Boolean(tickOptions.todayOnly && anchor && anchor.dateKey === todayKey && !rootsChanged
       && !(includeHistory && options.dailyHistoryArchiveEnabled));
     const refreshWsl = Boolean(tickOptions.refreshWsl);
     const hadPreviousFailure = tickHadFailure;
@@ -3117,6 +3380,13 @@ function startCollector(options) {
         targetClients: anchored && targetAnchorReady ? requestedTargetClients : [],
         sessionMetadataFallback,
         todayOnlyAnchor: anchored ? anchor : null,
+        wslDiscoveryFallback: sourceOptions.wslDiscovery,
+        discoverWslUsage: (deps) => {
+          const discovery = initialWslDiscovery || (options.discoverWslUsage || discoverWslUsage)(deps);
+          initialWslDiscovery = null;
+          sourceOptions.wslDiscovery = discovery;
+          return discovery;
+        },
         wslAnchor: anchored ? wslAnchor : null,
         wslStatus: anchored ? wslStatusAnchor : null,
         lastActivityDays: activityDaysAnchor,
@@ -3219,6 +3489,13 @@ function startCollector(options) {
           dateKey: captured.dateKey,
           timeZone: captured.timeZone,
           sessionIdentityVersion: captured.sessionIdentityVersion,
+          identityFingerprint: captured.identityFingerprint,
+          scanRoots: captured.scanRoots,
+          wslDiscovery: captured.wslDiscovery,
+          claudeIncludedInNative: captured.claudeIncludedInNative,
+          claudeReadBlocked: captured.claudeReadBlocked,
+          nativeIdentityState: captured.nativeIdentityState,
+          todayIdentityState: captured.nativeIdentityState?.today,
           today: captured.windowsPeriods.today,
           month: captured.windowsPeriods.month,
           allTime: captured.windowsPeriods.allTime,
@@ -3237,6 +3514,12 @@ function startCollector(options) {
         lastFullScanAt = Date.now();
         persistAnchor(tickPricingRevision, tickSourceRevision);
       } else if (anchored && captured) {
+        const todayClaimsChanged = JSON.stringify(anchor.todayIdentityState) !== JSON.stringify(captured.nativeIdentityState?.today);
+        anchor.todayIdentityState = captured.nativeIdentityState?.today;
+        if (anchor.claudeReadBlocked !== captured.claudeReadBlocked) {
+          anchor.claudeReadBlocked = captured.claudeReadBlocked;
+          persistAnchor(tickPricingRevision, tickSourceRevision);
+        }
         const identitiesUpgraded = anchor.sessionIdentityVersion !== captured.sessionIdentityVersion;
         if (identitiesUpgraded) {
           for (const period of ['today', 'month', 'allTime']) {
@@ -3305,7 +3588,7 @@ function startCollector(options) {
           wslAnchor = captured.wslBundle;
           wslStatusAnchor = captured.wslStatus || null;
         }
-        if (titlesChanged || projectsChanged || sourcesChanged || identitiesUpgraded) persistAnchor(tickPricingRevision, tickSourceRevision);
+        if (titlesChanged || projectsChanged || sourcesChanged || identitiesUpgraded || todayClaimsChanged) persistAnchor(tickPricingRevision, tickSourceRevision);
       }
       const transformedSummary = await onUpdate?.(summary, reason);
       publishedCodexVisibilityRevision = visibilityRevision;
@@ -3604,8 +3887,15 @@ function startCollector(options) {
       enterIntervalFallback(error);
       return;
     }
+    const originalRootFailure = anchor?.claudeIncludedInNative && anchor.wslDiscovery?.claudeRoots?.length
+      && ['EINVAL', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'ENOENT', 'EACCES', 'EPERM', 'ENODEV', 'EIO'].includes(error?.code);
+    if (originalRootFailure && (watchUsePolling || watchNativeForced || watchDescriptorFallback || watchHostPolling)) {
+      watchFallbackCode = error.code;
+      enterIntervalFallback(error);
+      return;
+    }
     if (stopped || watchUsePolling || watchNativeForced || watchDescriptorFallback || watchIntervalFallback) return;
-    if (!WATCH_DESCRIPTOR_ERROR_CODES.has(error?.code)) return;
+    if (!originalRootFailure && !WATCH_DESCRIPTOR_ERROR_CODES.has(error?.code)) return;
     watchDescriptorFallback = true;
     watchFallbackCode = error.code;
     emitDiagnosticEvent({
@@ -3631,7 +3921,11 @@ function startCollector(options) {
     // One dirExists sweep feeds both maps: probing twice would let a directory
     // created between the sweeps land in the watch list and not the attribution
     // list, or the reverse.
-    const watchRoots = watchClientRootsForClients(clients, sourceOptions);
+    // Originals and mirrors share the same native scan domain. Reuse exactly
+    // the frozen inventory; watcher setup never spawns wsl.exe.
+    const watchOptions = { ...sourceOptions,
+      scanRoots: anchor?.claudeIncludedInNative ? anchor.scanRoots : configuredScanRoots(sourceOptions) };
+    const watchRoots = watchClientRootsForClients(clients, watchOptions);
     const rootsByClient = Object.fromEntries(
       Object.entries(watchRoots)
         .map(([client, dirs]) => [client, dirs.map(canonicalWatchPath)])
@@ -3641,7 +3935,7 @@ function startCollector(options) {
     // copilot prefix. Canonicalised through the same function so both still
     // compare equal to the paths chokidar reports.
     const attributionRootsByClient = Object.fromEntries(
-      Object.entries(watchAttributionRootsForClients(clients, watchRoots, sourceOptions))
+      Object.entries(watchAttributionRootsForClients(clients, watchRoots, watchOptions))
         .map(([client, dirs]) => [client, dirs.map(canonicalWatchPath)])
     );
     // A subset of the same roots, matched separately so a write to a client's
@@ -3732,6 +4026,7 @@ function startCollector(options) {
           usageDirs,
           activitySources,
           clients,
+          scanRoots: watchOptions.scanRoots,
           customScanPaths: sourceOptions.customScanPaths,
           cursorDesktopRoots: sourceSyncRootsByClient.cursor || [],
           homeDir: sourceOptions.homeDir,
@@ -3763,6 +4058,7 @@ function startCollector(options) {
       lastWatchFailureCode = 'watcher-rebuild-failed';
       emitDiagnosticEvent({ subsystem: 'watcher', code: 'watcher-rebuild-failed' });
       log(`Cannot watch ${dirs.join(', ')}: ${error.message}`);
+      if (anchor?.claudeIncludedInNative) handleWatchError(error);
     }
   }
 
