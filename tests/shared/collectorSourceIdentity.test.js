@@ -455,14 +455,14 @@ test('partial full scan at rollover derives accepted Claude windows from event d
   try {
     await collector.whenIdle();
     partial = true;
-    clock = new Date('2026-10-14T06:00:00Z');
+    clock = new Date(2026, 9, 14, 12);
     await collector.tick('interval', { todayOnly: false, forceHistory: true });
     let retained = records.at(-1);
     assert.equal(retained.today.totalTokens, 0);
     assert.equal(retained.month.totalTokens, 100);
     assert.equal(retained.allTime.totalTokens, 100);
     assert.equal(retained.usageIdentity.periods.today, undefined);
-    clock = new Date('2026-11-01T06:00:00Z');
+    clock = new Date(2026, 10, 1, 12);
     await collector.tick('interval', { todayOnly: false, forceHistory: true });
     retained = records.at(-1);
     assert.equal(retained.today.totalTokens, 0);
