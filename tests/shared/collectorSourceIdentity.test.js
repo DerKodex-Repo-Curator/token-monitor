@@ -11,6 +11,7 @@ const { execFileSync } = require('node:child_process');
 const { collectUsageOnce, startCollector, configFingerprint, collectorAnchorTrust } = require('../../src/shared/collector');
 const { normalizeUsageIdentity } = require('../../src/shared/usageIdentity');
 const { createDeviceState } = require('../../src/shared/usage/deviceState');
+const { canonicalWatchPath } = require('../../src/shared/clientSources');
 const { deviceRecordFromAnchor } = require('../../src/shared/anchorSeed');
 const { installInProcessWatchHost } = require('../helpers/watchHost');
 
@@ -576,7 +577,7 @@ test('cached acknowledged UNC originals trigger warm today scans alongside host 
     assert.equal(calls.length, 3);
     const active = watches.at(-1);
     assert.ok(active.dirs.includes(root), 'acknowledged original admitted without a path-presence gate');
-    assert.ok(active.dirs.includes(mirror), 'host mirrors stay watched');
+    assert.ok(active.dirs.includes(canonicalWatchPath(mirror)), 'host mirrors stay watched');
     assert.equal(active.options.usePolling, false);
     const transcript = path.join(root, 'projects', 'project', 's.jsonl');
     assert.notEqual(active.options.ignored?.(transcript), true);

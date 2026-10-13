@@ -13,7 +13,13 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 
 const { deviceRecordFromAnchor } = require('../../src/shared/anchorSeed');
-const { configFingerprint } = require('../../src/shared/collector');
+const { configFingerprint: collectorConfigFingerprint } = require('../../src/shared/collector');
+
+// Match the simulated device OS instead of the CI runner OS.
+function configFingerprint(...args) {
+  args[7] = { platform: 'darwin', ...args[7] };
+  return collectorConfigFingerprint(...args);
+}
 const { qoderCnDataPaths } = require('../../src/shared/providers/qodercn/paths');
 const { aggregateDevices, emptyPeriod, extractUsageFromTokscale } = require('../../src/shared/usage');
 const { periodIdentityStateFromSource } = require('../../src/shared/usage/sourceIdentity');
