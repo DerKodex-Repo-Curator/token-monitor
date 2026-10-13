@@ -412,6 +412,14 @@ function legacyBoundary(archive, clients, options = {}) {
       retained[date] = selectLegacyDay(retained[date], day);
     }
   }
+  if (hasRetainedUsage && options.healthyLegacyGraph) {
+    const incoming = Object.fromEntries(observationsFromGraphs(options.healthyLegacyGraph, { sourceIdentity: true }));
+    for (const [date, day] of Object.entries(select(incoming))) {
+      // Preserve the whole native observation, including its session allocation,
+      // on equal accounting. Aggregate graph metadata cannot prove that allocation.
+      retained[date] = selectLegacyDay(retained[date], day);
+    }
+  }
   const days = retained;
   return { days, hasRetainedUsage, hasUsage: hasRetainedUsage,
     ...(Object.keys(generic.periods).length ? { periods: generic.periods, sessions: generic.sessions, clients: generic.clients } : {}) };
@@ -424,7 +432,8 @@ function captureSourceDailyHistory(archive, graphs, options) {
     ...options, timeZone: options.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone,
     retainedBoundaryChecked,
     canonicalClient: sourceProjectionClient,
-    legacyBoundary: (clients) => legacyBoundary(archive, clients, boundaryOptions)
+    legacyBoundary: (clients, graph, healthyLegacyObservation) => legacyBoundary(archive, clients,
+      healthyLegacyObservation ? { ...boundaryOptions, healthyLegacyGraph: graph } : boundaryOptions)
   });
   if (Object.keys(result.ledger.scopes).length || Object.keys(result.ledger.observations || {}).length) archive.sourceLedger = result.ledger;
   const clients = new Set(Object.values(result.ledger.scopes).flatMap(scope => scope.clients).map(sourceProjectionClient));

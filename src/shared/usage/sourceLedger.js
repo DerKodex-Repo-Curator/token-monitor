@@ -370,17 +370,22 @@ function captureSourceLedger(value, graphs, options = {}) {
       const scope = ledger.scopes[scan.id];
       const healthyLegacyObservation = reason === 'unresolved-legacy-boundary' && !scan.reason && !unresolvedPeer
         && options.retainedBoundaryChecked === true;
+      // Healthy legacy graphs can advance dated aggregates, but their event
+      // identities still cannot migrate this unresolved accounting boundary.
+      const observedBoundary = healthyLegacyObservation
+        ? options.legacyBoundary?.(scan.clients, scan.graph, true) || boundary : boundary;
       if (scope) {
         scope.observationFrontier = scan.capturedAt; scope.reason = reason;
         scope.blockNativeWatch = true;
-        if (healthyLegacyObservation && scope.mode === 'legacy' && scope.unresolvedBoundary && scope.legacyPeriods) {
-          advanceLegacyBoundary(scope, boundary);
+        if (healthyLegacyObservation && scope.mode === 'legacy' && scope.unresolvedBoundary
+          && (scope.legacyPeriods || observedBoundary?.periods)) {
+          advanceLegacyBoundary(scope, observedBoundary);
         }
       }
       else if (!overlaps.length && !unresolvedPeer && options.retainedBoundaryChecked === true && boundary?.hasRetainedUsage) ledger.scopes[scan.id] = {
         mode: 'legacy', clients: [...new Set([...scan.clients, ...(boundary.clients || [])])].sort(),
-        sessions: boundary.sessions || {}, events: {}, observationFrontier: scan.capturedAt, reason,
-        legacyDays: boundary.days || {}, ...(boundary.periods ? { legacyPeriods: legacyPeriods(boundary.periods) } : {}),
+        sessions: observedBoundary.sessions || {}, events: {}, observationFrontier: scan.capturedAt, reason,
+        legacyDays: observedBoundary.days || {}, ...(observedBoundary.periods ? { legacyPeriods: legacyPeriods(observedBoundary.periods) } : {}),
         unresolvedBoundary: true, blockNativeWatch: true };
       if (!scope && healthyLegacyObservation && ledger.scopes[scan.id]?.legacyPeriods) {
         ledger.scopes[scan.id].blockNativeWatch = false;

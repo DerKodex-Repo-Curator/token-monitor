@@ -85,7 +85,14 @@ function isSessionUsageArchiveEntryEvidence(key, entry) {
     || normalizeClientName(entry.client) !== entry.client || typeof entry.sessionId !== 'string' || !entry.sessionId.trim()
     || key !== `${entry.client}:${entry.sessionId}` || !evidenceRecord(entry.periods)) return false;
   const names = Object.keys(entry.periods);
-  if (!names.length || names.some(name => !PERIODS.includes(name))) return false;
+  if (!names.length) {
+    // Pruning today/month-only entries retains their valid identity/frontier
+    // as a zero-accounting tombstone. It is not a silently discarded bad row.
+    return Number.isFinite(Date.parse(entry.capturedAt)) && /^\d{4}-\d{2}-\d{2}$/.test(entry.day)
+      && /^\d{4}-\d{2}$/.test(entry.month) && entry.day.slice(0, 7) === entry.month
+      && evidenceRecord(entry.periodWindows) && Object.keys(entry.periodWindows).length === 0;
+  }
+  if (names.some(name => !PERIODS.includes(name))) return false;
   return names.every(name => {
     const row = entry.periods[name];
     if (!evidenceRecord(row) || row.client !== entry.client || row.sessionId !== entry.sessionId
@@ -269,7 +276,7 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
       if (ownedClients.has(session.client)) {
         // An unresolved legacy boundary is not migration proof. Preserve its
         // original evidence; only a migrated ledger may retire these counters.
-        if (!legacyClients.has(session.client)) rememberOwnedSessionMetadata(archive, session, archiveKey, capturedAtIso, day, month, changedKeys);
+        if (!legacyClients.has(session.client)) rememberOwnedSessionMetadata(archive, session, archiveKey, capturedAtIso, day, month, changedKeys, source?.revokedTitles?.[archiveKey]);
         continue;
       }
       if (sourceArchivedKeys.has(archiveKey) || fullLiveKeys.has(archiveKey)) continue;
@@ -304,7 +311,7 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
       // only in what the round-trip drops is caught by the second comparison.
       if (sameWindow && sameJson(entry.periods[periodName], session)) continue;
       const nextSession = cloneJson(session);
-      if (managedKeys.has(archiveKey)) enrichSessionMetadata(nextSession, entry, periodName);
+      if (managedKeys.has(archiveKey)) enrichSessionMetadata(nextSession, entry, periodName, source?.revokedTitles?.[archiveKey]);
       delete nextSession.liveActivity;
       delete nextSession.waitingForInput;
       delete nextSession.sourcePath;
@@ -330,14 +337,14 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
 
 // Source-owned counters live only in the ledger. The generic archive can
 // still retain descriptive metadata for an omitted ID, represented by zero.
-function rememberOwnedSessionMetadata(archive, session, key, capturedAt, day, month, changedKeys) {
+function rememberOwnedSessionMetadata(archive, session, key, capturedAt, day, month, changedKeys, revokedTitle) {
   const entry = archive.sessions[key];
   if (newestSessionObservation(entry) > Date.parse(capturedAt)) return;
   const prior = entry?.periods?.allTime;
   const metadata = { client: session.client, sessionId: session.sessionId, totalTokens: 0 };
   for (const field of ['title', 'projectId', 'projectLabel', 'sessionKind', 'nativeSessionId', 't3ThreadId']) {
     if (session[field]) metadata[field] = session[field];
-    else if (prior?.[field]) metadata[field] = prior[field];
+    else if (prior?.[field] && !(field === 'title' && prior[field] === revokedTitle)) metadata[field] = prior[field];
   }
   // A missing parentClient on a new link means the child's own client.
   // Never combine that link with an older cross-client namespace.
@@ -592,14 +599,14 @@ function scrubSessionArchiveSource(summary, options = {}) {
   return next;
 }
 
-function enrichSessionMetadata(session, entry, periodName) {
+function enrichSessionMetadata(session, entry, periodName, revokedTitle) {
   const retained = entry?.periods?.[periodName] || entry?.periods?.allTime
     || entry?.periods?.month || entry?.periods?.today;
   if (!retained) return;
   // The daily projection owns every counter. Only fill absent descriptive
   // fields when an omitted native row could not supply its metadata.
   for (const field of ['title', 'sessionKind', 'nativeSessionId', 't3ThreadId']) {
-    if (!session[field] && retained[field]) session[field] = retained[field];
+    if (!session[field] && retained[field] && !(field === 'title' && retained[field] === revokedTitle)) session[field] = retained[field];
   }
   if (!session.parentSessionId && retained.parentSessionId) {
     session.parentSessionId = retained.parentSessionId;
@@ -614,13 +621,13 @@ function enrichSessionMetadata(session, entry, periodName) {
   }
 }
 
-function enrichManagedSessionMetadata(summary, archive, managedKeys) {
+function enrichManagedSessionMetadata(summary, archive, managedKeys, revokedTitles) {
   const periods = summary.periods && typeof summary.periods === 'object' ? summary.periods : summary;
   for (const periodName of PERIODS) {
     for (const key of managedKeys) {
       const session = periods[periodName]?.sessions?.[key];
       if (!session) continue;
-      enrichSessionMetadata(session, archive.sessions[key], periodName);
+      enrichSessionMetadata(session, archive.sessions[key], periodName, revokedTitles?.[key]);
     }
   }
 }
@@ -635,7 +642,7 @@ function applySessionUsageArchive(summary, archive, options = {}) {
   const checkedClients = new Set((summary.sessionArchiveSource?.boundaryCheckedClients || []).map(normalizeClientName));
   const ownedClients = new Set((summary.sessionArchiveSource?.ownedClients || []).map(normalizeClientName).filter(client => checkedClients.has(client)));
   const next = scrubSessionArchiveSource(summary, options);
-  enrichManagedSessionMetadata(next, normalizedArchive, sourceManagedKeys);
+  enrichManagedSessionMetadata(next, normalizedArchive, sourceManagedKeys, summary.sessionArchiveSource?.revokedTitles);
   const targetPeriods = new Map();
   const targetFor = (periodName) => {
     if (!targetPeriods.has(periodName)) {
