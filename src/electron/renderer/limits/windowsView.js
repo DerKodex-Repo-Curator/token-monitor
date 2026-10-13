@@ -426,6 +426,16 @@
   // surfaces can share one measurement.
   let tooltipAnchorSeq = 0;
 
+  function positionCenteredDetailTooltip(tooltip) {
+    if (!tooltip.classList.contains('is-centered') || !tooltip.matches(':popover-open')) return;
+    tooltip.style.setProperty('--tooltip-shift', '0px');
+    const rect = tooltip.getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth;
+    const shift = rect.left < 8 ? 8 - rect.left
+      : rect.right > viewportWidth - 8 ? viewportWidth - 8 - rect.right : 0;
+    tooltip.style.setProperty('--tooltip-shift', `${shift}px`);
+  }
+
   function attachLimitDetailTooltip(wrap, tooltip) {
     // A popover has no positioned ancestor to lay out against, so it is anchored
     // to its own trigger. Anchor names are per-element and the panel draws many
@@ -445,6 +455,7 @@
       tooltip.showPopover?.();
       // Measured after opening: a closed popover has no box to measure.
       tooltip.classList.toggle('is-below', wrap.getBoundingClientRect().top < tooltip.offsetHeight + 8);
+      positionCenteredDetailTooltip(tooltip);
     };
     const close = () => {
       tooltip.hidePopover?.();
@@ -525,7 +536,7 @@
   }
 
   // A gauge or plan label can be the trigger itself; no extra info icon needed.
-  function setDetailTooltip(wrap, entries) {
+  function setDetailTooltip(wrap, entries, { centered = false } = {}) {
     let tooltip = wrap.querySelector('.limit-detail-tooltip');
     if (!entries?.length) {
       tooltip?.hidePopover?.();
@@ -551,11 +562,14 @@
       0
     );
     const next = detailTooltipNode(entries, columns);
+    next.classList.toggle('is-centered', centered);
     if (tooltip) {
       // Sync only the layout class: is-below is positional state the tooltip
       // manages itself, and overwriting it mid-hover flips an open popover.
       tooltip.classList.toggle('limit-detail-tooltip-triple', next.classList.contains('limit-detail-tooltip-triple'));
+      tooltip.classList.toggle('is-centered', centered);
       tooltip.replaceChildren(...next.children);
+      positionCenteredDetailTooltip(tooltip);
     } else {
       tooltip = next;
       wrap.append(tooltip);
@@ -1580,12 +1594,26 @@
     } else {
       // Default: render only the windows the provider actually has. Providers
       // that only expose a single window shouldn't leave a half-empty bar next to
-      // the real one. (Grok is handled above; this branch covers minimax's
-      // session + weekly pair and any future session/weekly provider.)
+      // the real one. Credits windows carry money rather than quota percentages;
+      // their display meter is derived without changing the provider reading.
       const session = windowForKind(provider, 'session');
       const weekly = windowForKind(provider, 'weekly');
       if (session) windows.append(limitWindowNode(providerWindowLabel(provider, session), session, color, 0.95));
       if (weekly) windows.append(limitWindowNode(providerWindowLabel(provider, weekly), weekly, color, 0.68));
+      for (const creditsWindow of (provider.windows || []).filter(isCreditsWindow)) {
+        const amount = creditsAmount(provider, creditsWindow);
+        if (amount === null) continue;
+        const balanceNode = limitWindowNode(
+          providerWindowLabel(provider, creditsWindow, 'Balance'),
+          { ...creditsWindow, remainingPercent: creditsMeterPercent(provider, creditsWindow) },
+          color,
+          0.95,
+          formatMoney(amount, creditsCurrency(provider, creditsWindow))
+        );
+        balanceNode.classList.add('limit-window-wide');
+        if (!creditsWindow.resetsAt && !creditsWindow.resetDescription) balanceNode.classList.add('limit-window-no-reset');
+        windows.append(balanceNode);
+      }
     }
     if (!options.showAllUsageItems) {
       hideUsageItems(windows, usageItems.hiddenUsageItemSet(settings()?.limitProviderHiddenItems, provider?.provider));

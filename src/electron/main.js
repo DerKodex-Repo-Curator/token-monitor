@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, screen, session, shell, systemPreferences } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, powerMonitor, screen, session, shell, systemPreferences } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, readJson, sharedDataDir } = require('../shared/config');
 const {
@@ -23,6 +23,7 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
 const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/trayLayout');
 const fontSettingsApi = require('../shared/fontSettings');
 const motionPreferenceApi = require('./motionPreference');
+const tokenNumberAnimationApi = require('./tokenNumberAnimation');
 const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
 const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
 const { createClaudeWebFetch } = require('./providers/claude/webFetch');
@@ -92,6 +93,7 @@ const {
   clientDiagnosticRoots,
   getTokscaleStatus,
   lookupModelPricing,
+  pricingFingerprint,
   normalizeHistoryIntervalMs,
   visibleDiagnosticRoots
 } = require('../shared/collector');
@@ -104,6 +106,7 @@ const { sendWhenRendererReady } = require('./deferredWindowSend');
 const { actionWindowForEvent, activateWindowAction, handoffWindow, showWindow } = require('./windowLifecycle');
 const { applyInitialLimitProviderSeed } = require('./initialLimitProviderSeed');
 const { applyCodexAdditionalLimitsMigration } = require('./codexAdditionalLimitsMigration');
+const { applyActivityPatch, materializeActivity } = require('../shared/sessionActivityProjection');
 const { createDeviceRuntime } = require('../shared/usage/deviceRuntime');
 const { externalAgentActive } = require('../shared/usage/agentPid');
 const { createDiagnosticJournal } = require('../shared/diagnosticJournal');
@@ -200,6 +203,7 @@ const {
 } = require('../shared/appUpdater');
 const cursorAuth = require('../shared/providers/cursor/auth');
 const cursorProbe = require('../shared/providers/cursor/probe');
+const { stepfunToken } = require('../shared/providers/stepfun/limits');
 const opencodeWeb = require('../shared/providers/opencode/web');
 const opencodeGoApi = require('../shared/providers/opencode/goApi');
 const opencodeProfiles = require('../shared/providers/opencode/profiles');
@@ -335,7 +339,9 @@ const {
   attachLocalPresentationNativeViews,
   completeLocalSyncStats,
   composeLocalOnlySummary,
-  composeLocalSyncSummary
+  composeLocalSyncSummary,
+  projectLocalActivity,
+  localActivityPatch
 } = require('./syncDisplayStats');
 const {
   createRendererSnapshots,
@@ -407,10 +413,12 @@ const { applyWindowsChrome } = require('./windowsChrome');
 const { canUseEdgeDock, createEdgeDockController, edgeDockSupported } = require('./edgeDock/controller');
 const { createFullScreenProbe } = require('./edgeDock/fullScreenProbe');
 const {
+  normalizeEdgeDockCustomScale,
   normalizeEdgeDockDisplayId,
   normalizeEdgeDockMode,
   normalizeEdgeDockOffset,
-  normalizeEdgeDockSide
+  normalizeEdgeDockSide,
+  normalizeEdgeDockSize
 } = require('./edgeDock/geometry');
 const { buildEdgeDockCells } = require('./renderer/edgeDock/presentation');
 const { DERIVED_PERIODS: EDGE_DOCK_DERIVED_PERIODS, normalizeEdgeDockItems } = require('./renderer/edgeDock/items');
@@ -566,6 +574,7 @@ function defaultSettings() {
     windowsBackdrop: 'acrylic',
     macBackdrop: 'vibrancy',
     reduceMotion: 'system',
+    tokenNumberAnimation: 'roll',
     showLiveDot: true,
     showToolIcons: true,
     titleIconOnly: true,
@@ -595,10 +604,14 @@ function defaultSettings() {
     floatingBubbleCustomLayout: createDefaultTrayLayout(),
     floatingBubbleBounds: null,
     edgeDockEnabled: false,
+    edgeDockRefreshEnabled: false,
+    edgeDockRunningIndicatorEnabled: true,
     edgeDockMode: 'autoHide',
     edgeDockHaptic: true,
     edgeDockWarnColors: false,
     edgeDockMacBackdrop: 'inherit',
+    edgeDockSize: 'medium',
+    edgeDockCustomScale: 1,
     edgeDockSide: 'right',
     edgeDockOffset: null,
     edgeDockDisplayId: null,
@@ -609,6 +622,8 @@ function defaultSettings() {
     icloudWriterId: '',
     lastPostedDeviceId: '',
     clients: clientsCsvForSetting(process.env.TOKEN_MONITOR_CLIENTS),
+    codexDotsEnabled: process.env.TOKEN_MONITOR_CODEX_LOCAL_USAGE === '1',
+    codexDotsVisible: true,
     customScanPaths: {},
     clientDisplayOrder: '',
     hiddenClients: '',
@@ -849,6 +864,25 @@ function persistClaudeWebCookieRenewal({ previousCookie, cookie } = {}) {
   return true;
 }
 
+// The StepFun Oasis token's access half expires every 30 minutes; the limits
+// fetcher rotates it through the platform's own RefreshToken endpoint. The
+// rotated pair lands here and is stored only while the setting still holds the
+// token that was refreshed, so a fresh paste landing mid-flight always wins.
+// Values are compared in the fetcher's normalized form (a pasted raw cookie
+// header and its bare token compare equal), and the stored value is normalized
+// on the way in.
+function persistStepfunTokenRenewal({ previousToken, token } = {}) {
+  if (!settings?.stepfunToken) return false;
+  const expected = stepfunToken({}, { stepfunToken: previousToken });
+  const renewed = stepfunToken({}, { stepfunToken: token });
+  if (!expected || !renewed) return false;
+  if (stepfunToken({}, { stepfunToken: settings.stepfunToken }) !== expected) return false;
+  if (settings.stepfunToken === renewed) return true;
+  settings.stepfunToken = renewed;
+  saveSettings({ throwOnError: true });
+  return true;
+}
+
 // A save-time probe gets the collector's transports but none of its write-backs:
 // a credential that has not been saved yet must not renew itself into
 // settings, so a rotation is reported into `renewed` and stored with the rest
@@ -861,6 +895,10 @@ function credentialProbeDeps(renewed = {}) {
     claudeWebFetch: electronClaudeWebFetch,
     onClaudeWebCookieRenewed: ({ cookie }) => {
       renewed.claudeWebCookie = cookie;
+      return true;
+    },
+    onStepfunTokenRenewed: ({ token }) => {
+      renewed.stepfunToken = token;
       return true;
     },
     providerRuntimeState: new Map(),
@@ -884,6 +922,7 @@ function electronLimitsDeps() {
     },
     resolveConfigSnapshot: () => electronLimitsConfig(),
     onClaudeWebCookieRenewed: persistClaudeWebCookieRenewal,
+    onStepfunTokenRenewed: persistStepfunTokenRenewal,
     onAntigravityCredentialsRenewed: persistAntigravityCredentialsRenewal,
     onThirdPartyCredentialsRenewed: persistThirdPartyCredentialsRenewal,
     onThirdPartyAccountKeyResolved: persistThirdPartyAccountKey
@@ -2541,6 +2580,8 @@ function readSettings() {
     if (saved.wslScanEnabled !== undefined) {
       merged.wslScanEnabled = parseBoolean(saved.wslScanEnabled, true);
     }
+    merged.codexDotsEnabled = parseBoolean(merged.codexDotsEnabled, false);
+    merged.codexDotsVisible = parseBoolean(merged.codexDotsVisible, true);
     merged.collectionMode = normalizeCollectionMode(merged.collectionMode);
     merged.collectionIntervalMs = normalizeCollectionIntervalMs(merged.collectionIntervalMs);
     merged.syncUploadIntervalMs = normalizeSyncUploadIntervalMs(merged.syncUploadIntervalMs);
@@ -2550,6 +2591,7 @@ function readSettings() {
     merged.sessionTitlesEnabled = parseBoolean(merged.sessionTitlesEnabled, true);
     merged.sessionContextMetric = normalizeSessionContextMetric(merged.sessionContextMetric);
     merged.reduceMotion = motionPreferenceApi.normalize(merged.reduceMotion);
+    merged.tokenNumberAnimation = tokenNumberAnimationApi.normalize(merged.tokenNumberAnimation);
     merged.showLiveTokenRate = parseBoolean(merged.showLiveTokenRate, false);
     merged.liveTokenRateScope = normalizeLiveTokenRateScope(merged.liveTokenRateScope);
     merged.compactTokenUnits = normalizeCompactTokenUnits(merged.compactTokenUnits);
@@ -2599,6 +2641,8 @@ function readSettings() {
     merged.floatingBubbleContent = normalizeTrayContent(merged.floatingBubbleContent, 'icon');
     merged.floatingBubbleCustomLayout = normalizeTrayLayout(merged.floatingBubbleCustomLayout);
     merged.edgeDockEnabled = parseBoolean(merged.edgeDockEnabled, false);
+    merged.edgeDockRefreshEnabled = parseBoolean(merged.edgeDockRefreshEnabled, false);
+    merged.edgeDockRunningIndicatorEnabled = parseBoolean(merged.edgeDockRunningIndicatorEnabled, true);
     merged.edgeDockSide = normalizeEdgeDockSide(merged.edgeDockSide);
     merged.edgeDockOffset = normalizeEdgeDockOffset(merged.edgeDockOffset);
     merged.edgeDockDisplayId = normalizeEdgeDockDisplayId(merged.edgeDockDisplayId);
@@ -2606,6 +2650,8 @@ function readSettings() {
     merged.edgeDockHaptic = parseBoolean(merged.edgeDockHaptic, true);
     merged.edgeDockWarnColors = parseBoolean(merged.edgeDockWarnColors, false);
     merged.edgeDockMacBackdrop = normalizeEdgeDockBackdropMode(merged.edgeDockMacBackdrop);
+    merged.edgeDockSize = normalizeEdgeDockSize(merged.edgeDockSize);
+    merged.edgeDockCustomScale = normalizeEdgeDockCustomScale(merged.edgeDockCustomScale);
     merged.edgeDockItems = normalizeEdgeDockItems(merged.edgeDockItems);
     merged.trayCustomLayout = normalizeTrayLayout(merged.trayCustomLayout);
     merged.showTrayProviderBadge = parseBoolean(merged.showTrayProviderBadge, false);
@@ -2926,6 +2972,8 @@ let latestHubStatsIdentity = null;
 let hubModeGeneration = 0;
 let tray = null;
 let latestStats = null;
+let statsPushSource = null;
+let statsPushRevision = 0;
 let macWidgetSnapshotController = null;
 let macWidgetDemand = null;
 let macWidgetPublicationReady = false;
@@ -2981,7 +3029,7 @@ function rendererAllTimeSessions(stats) {
     const complete = completeLocalSyncStats(stats);
     const hubSnapshot = snapshotLocalDevices.get(stats);
     const sessions = hubSnapshot
-      ? mergedLocalAllTimeSessions(complete.periods, hubSnapshot.localDevice)
+      ? mergedLocalAllTimeSessions(complete.periods, materializeActivity(hubSnapshot.localDevice))
       : complete.periods?.allTime?.sessions || {};
     return projectModelAliasSessions(stats, settings?.sessionTitlesEnabled === false ? withoutSessionTitles(sessions) : sessions, aliases, { grouping });
   });
@@ -4281,6 +4329,7 @@ async function startIcloudCollector() {
       transformUsage: usageTransform.transform,
       usageOptions,
       sink,
+      onSessionActivity: publishLocalSessionActivity,
       onDiagnosticEvent: recordDiagnosticEvent,
       onError: (error, reason) => console.log(`[icloud-collector] ${reason}: ${error.message}`)
     }, {
@@ -4362,6 +4411,7 @@ function startSyncCollector() {
     transformUsage: usageTransform.transform,
     usageOptions,
     sink,
+    onSessionActivity: publishLocalSessionActivity,
     onDiagnosticEvent: recordDiagnosticEvent,
     onError: (error, reason) => console.log(`[sync-collector] ${reason}: ${error.message}`)
   }, {
@@ -4419,6 +4469,7 @@ function startHostCollector() {
     transformUsage: usageTransform.transform,
     usageOptions,
     sink,
+    onSessionActivity: publishLocalSessionActivity,
     onDiagnosticEvent: recordDiagnosticEvent,
     onError: (error, reason) => console.log(`[host-collector] ${reason}: ${error.message}`)
   }, {
@@ -4476,6 +4527,8 @@ function injectLocalDeviceStatus(stats) {
       if (lastCollectedDevice.clientHealth) device.clientHealth = lastCollectedDevice.clientHealth;
       if (lastCollectedDevice.wslStatus) device.wslStatus = lastCollectedDevice.wslStatus;
     }
+    const activity = localActivityPatch(lastCollectedDevice);
+    if (activity) stats = projectLocalActivity(stats, activity);
   }
   if (mode !== 'local') snapshotLocalDevices.set(stats, { localDevice: lastCollectedDevice });
   return stats;
@@ -4704,6 +4757,33 @@ function scheduleMacWidgetSnapshot(stats, producerOwner) {
   return ensureMacWidgetSnapshotController()?.enqueue({ stats, producerOwner }) || false;
 }
 
+function publishLocalSessionActivity(patch) {
+  if (!lastCollectedDevice || !ownsUsageRuntime()) return;
+  const previousDevice = lastCollectedDevice;
+  lastCollectedDevice = projectLocalActivity(lastCollectedDevice, patch);
+  if (localDevice) localDevice = localDevice === previousDevice ? lastCollectedDevice : applyActivityPatch(localDevice, patch);
+  if (!latestStats) return;
+  const previous = latestStats;
+  latestStats = projectLocalActivity(previous, patch);
+  const localSnapshot = snapshotLocalDevices.get(previous);
+  if (localSnapshot) snapshotLocalDevices.set(latestStats, {
+    ...localSnapshot, localDevice: applyActivityPatch(localSnapshot.localDevice, patch)
+  });
+  if (localStats === previous) localStats = latestStats;
+  const snapshot = rendererSnapshots.updateActivity(previous, latestStats);
+  edgeDockManualStats = null;
+  // Only activity metadata crosses IPC. Accounting freshness, sync uploads,
+  // exports, History and rate samples remain on the usage publication lane.
+  const displayPatch = localActivityPatch(latestStats);
+  const visiblePatch = settings.sessionTitlesEnabled === false
+    ? { ...displayPatch, nativeSessions: Object.fromEntries(Object.entries(displayPatch.nativeSessions)
+        .map(([name, sessions]) => [name, withoutSessionTitles(sessions)])) }
+    : displayPatch;
+  presentationCache.updateActivity(previous, latestStats, (stats) => applyActivityPatch(stats, visiblePatch));
+  updateEdgeDockCells(electronPresentationStats(latestStats));
+  sendPush({ event: 'session-activity', data: { patch: visiblePatch, snapshot } });
+}
+
 // Two options, both for the cold-start seed and neither for live stats.
 // `skipExport` keeps a republished snapshot from spending the auto-export
 // interval that this run's first real scan needs. `deferToRenderer` waits for
@@ -4715,8 +4795,15 @@ function sendPush(payload, options = {}) {
   const previousHistoryRevision = statsHistoryRevision(latestStats);
   let rendererPayload = payload;
   if (payload?.data?.stats) {
-    injectLocalDeviceStatus(payload.data.stats);
+    payload.data.stats = injectLocalDeviceStatus(payload.data.stats);
     latestStats = payload.data.stats;
+    // Client local batches overlay usage on the cached Hub snapshot; they do
+    // not supersede an in-flight read of fresh remote stats.
+    if (!(settings?.hubMode === 'client' && payload.data.reason === 'local')) {
+      statsPushRevision += 1;
+      statsPushSource = { generation: hubModeGeneration, identity: currentHubStatsIdentity() };
+    }
+    edgeDockManualStats = null;
     getSyncContentRuntime().notifyStats(latestStats);
     const visibleStats = electronPresentationStats(latestStats);
     migrateCodexAdditionalLimits(visibleStats);
@@ -4956,6 +5043,7 @@ function startLocalCollector() {
     transformUsage: usageTransform.transform,
     usageOptions,
     progressive: true,
+    onSessionActivity: publishLocalSessionActivity,
     onRecord: (summary, meta) => {
       seedInitialLimitProviders(summary);
       const reason = meta.reason;
@@ -5340,6 +5428,7 @@ function edgeDockAppearance(rendererSettings = settingsForRenderer()) {
     glassBlur: source.glassBlur,
     systemGlass: source.systemGlass,
     reduceMotion: source.reduceMotion,
+    tokenNumberAnimation: source.tokenNumberAnimation,
     interfaceFontFamily: source.interfaceFontFamily,
     displayFontFamily: source.displayFontFamily,
     showLimitUsed: source.showLimitUsed,
@@ -5356,6 +5445,7 @@ function edgeDockAppearance(rendererSettings = settingsForRenderer()) {
     sessionContextMetric: source.sessionContextMetric,
     maskLimitAccountEmails: source.maskLimitAccountEmails,
     edgeDockWarnColors: source.edgeDockWarnColors === true,
+    edgeDockRunningIndicatorEnabled: source.edgeDockRunningIndicatorEnabled !== false,
     // The user's own subscription records, so the card's plan cell can decorate
     // itself exactly as the page's does. They belong here rather than on a cell
     // because a record is not a property of a provider: it binds to one account
@@ -5424,7 +5514,7 @@ function edgeDockLiveRateSample(visibleStats) {
   if (expiresAt) {
     edgeDockRateTimer = setTimeout(() => {
       edgeDockRateTimer = null;
-      if (latestStats) updateEdgeDockCells(electronPresentationStats(latestStats));
+      repaintEdgeDockCells();
     }, Math.max(0, expiresAt - Date.now()) + 20);
   }
   return edgeDockRateTracker.getSample();
@@ -5435,6 +5525,20 @@ function edgeDockLiveRateSample(visibleStats) {
 // re-projects when the answer lands. Until then those readouts show unknown.
 let edgeDockDerivedPeriods = {};
 let edgeDockDerivedSignature = '';
+
+// A manual read is not a shared push snapshot. Keep it for dock re-projections
+// until the next push, without changing the renderer/widget snapshot source.
+let edgeDockManualStats = null;
+
+function edgeDockStats() {
+  return edgeDockManualStats?.generation === hubModeGeneration && edgeDockManualStats.runtime === deviceRuntimeHandle
+    ? edgeDockManualStats.stats : latestStats;
+}
+
+function repaintEdgeDockCells() {
+  const stats = edgeDockStats();
+  if (stats) updateEdgeDockCells(electronPresentationStats(stats));
+}
 
 function edgeDockDerivedSelections() {
   const items = Array.isArray(settings?.edgeDockItems) ? settings.edgeDockItems : [];
@@ -5460,8 +5564,9 @@ function refreshEdgeDockDerivedPeriods(visibleStats) {
   edgeDockDerivedSignature = signature;
   getDashboardHistory({ includeDevices: true })
     .then((history) => {
-      if (signature !== edgeDockDerivedSignature || !latestStats) return;
-      const stats = electronPresentationStats(latestStats);
+      const source = edgeDockStats();
+      if (signature !== edgeDockDerivedSignature || !source) return;
+      const stats = electronPresentationStats(source);
       const sources = fixedPeriodRangesApi.joinDeviceHistorySources(history?.deviceHistories || [], stats.devices || []);
       const preferred = typeof app.getPreferredSystemLanguages === 'function' ? app.getPreferredSystemLanguages() : [app.getLocale()];
       const next = {};
@@ -5511,10 +5616,19 @@ function refreshEdgeDockForecast() {
     .then((forecast) => {
       const changed = JSON.stringify(forecast || null) !== JSON.stringify(edgeDockForecast);
       edgeDockForecast = forecast || null;
-      if (changed && latestStats) updateEdgeDockCells(electronPresentationStats(latestStats));
+      if (changed) repaintEdgeDockCells();
     })
     .catch((error) => console.log(`[edge-dock] reset forecast failed: ${error.message}`))
     .finally(() => { edgeDockForecastInFlight = false; });
+}
+
+function canRefreshEdgeDockStats() {
+  return true;
+}
+
+async function refreshStatsFromEdgeDock() {
+  await refreshManualStats();
+  return { ok: true };
 }
 
 function edgeDockCellsFor(visibleStats) {
@@ -5595,7 +5709,7 @@ function scheduleEdgeDockSessionExpiry() {
   const delay = Math.max(EDGE_DOCK_EXPIRY_FLOOR_MS, expiresAt - Date.now() + 50);
   edgeDockSessionExpiryTimer = setTimeout(() => {
     edgeDockSessionExpiryTimer = null;
-    if (latestStats) updateEdgeDockCells(electronPresentationStats(latestStats));
+    repaintEdgeDockCells();
   }, delay);
 }
 
@@ -5604,6 +5718,7 @@ function ensureEdgeDockController() {
   edgeDockController = createEdgeDockController({
     BrowserWindow,
     ipcMain,
+    powerMonitor,
     screen,
     platform: process.platform,
     rendererDir: path.join(__dirname, 'renderer'),
@@ -5639,8 +5754,10 @@ function ensureEdgeDockController() {
     performHaptic: (pattern, performanceTime) => performMacHaptic({ pattern, performanceTime }),
     isFullScreen: createFullScreenProbe({ platform: process.platform, screen, logger: (message) => console.log(message) }),
     // The dock card's Switch button runs the same swap the Limits view does,
-    // then repaints from the refreshed records. It is the dock's only write.
+    // then repaints from the refreshed records.
     onSwitchCodexAccount: (accountId) => switchCodexAccountFromEdgeDock(accountId),
+    canRefreshLimits: () => canRefreshEdgeDockStats(),
+    onRefreshLimits: () => refreshStatsFromEdgeDock(),
     onOpenResetForecastSource: () => {
       if (isAllowedExternalUrl(CODEX_RESET_FORECAST_SOURCE_URL)) void shell.openExternal(CODEX_RESET_FORECAST_SOURCE_URL);
     },
@@ -5677,7 +5794,8 @@ function syncEdgeDock(rendererSettings) {
   // Through the same path as a stats push, so the session-expiry timer is armed
   // from these cells too: a settings change replaces what is on screen just as a
   // push does, and skipping the reschedule here left the rail on a stale reading.
-  if (latestStats) pushEdgeDockCells(edgeDockCellsFor(electronPresentationStats(latestStats)));
+  const stats = edgeDockStats();
+  if (stats) pushEdgeDockCells(edgeDockCellsFor(electronPresentationStats(stats)));
   controller.sync();
   // Now that the controller is running (sync() starts it when enabled), arm the
   // timer against the cells that were just handed over.
@@ -5689,7 +5807,7 @@ function refreshLimitStatsPresentation() {
   const visibleStats = electronPresentationStats(latestStats);
   migrateCodexAdditionalLimits(visibleStats);
   scheduleMacWidgetSnapshot(visibleStats, captureMacWidgetProducerOwner());
-  updateEdgeDockCells(visibleStats);
+  repaintEdgeDockCells();
   updateTrayDisplay();
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
@@ -6021,6 +6139,7 @@ function startMode() {
   hubModeGeneration += 1;
   advanceMacWidgetProducerAndSourceEpoch();
   clearLatestHubStatsCache();
+  edgeDockManualStats = null;
   const icloudStop = stopIcloudRuntime();
   // Tear down collectors synchronously so they can't double-run while the
   // async reconciliation below is queued. iCloud's filesystem teardown is
@@ -6291,6 +6410,31 @@ async function writeExportTo(dir, periods, options = {}) {
   // retries next tick instead of being skipped forever.
   if (options.skipUnchanged) lastAutoExport = { dir, signature };
   return { ok: true };
+}
+
+let manualStatsRefreshInFlight = null;
+
+function refreshManualStats() {
+  const runtime = deviceRuntimeHandle;
+  const generation = hubModeGeneration;
+  if (manualStatsRefreshInFlight?.runtime === runtime && manualStatsRefreshInFlight.generation === generation) {
+    return manualStatsRefreshInFlight.promise;
+  }
+  const revision = statsPushRevision;
+  const request = { runtime, generation, promise: null };
+  request.promise = fetchStats({ force: true, forceHistory: true, forceSelfSync: true }).then((stats) => {
+    // Both buttons update the dock once. A push received while this read was
+    // pending has already taken over, so a late read must not replace it.
+    if (runtime === deviceRuntimeHandle && generation === hubModeGeneration && revision === statsPushRevision) {
+      edgeDockManualStats = { stats, generation, runtime };
+      repaintEdgeDockCells();
+    }
+    return stats;
+  }).finally(() => {
+    if (manualStatsRefreshInFlight === request) manualStatsRefreshInFlight = null;
+  });
+  manualStatsRefreshInFlight = request;
+  return request.promise;
 }
 
 async function fetchStats(options = {}) {
@@ -7349,13 +7493,17 @@ app.whenReady().then(() => {
     const settingsIdentity = contentRuntime.status().identity;
     await contentRuntime.publishPatch(patch, patch?.syncContentBase);
     if (sharedEdit && settingsIdentity !== contentRuntime.status().identity) throw new Error('hub_changed');
-    const result = applySettingsPatch(patch);
+    let dotsVisibilityApplied = Promise.resolve();
+    applySettingsPatch(patch, (refresh) => { dotsVisibilityApplied = refresh; });
     await latestUsageHost?.transformSettingsApplied?.();
-    return result;
+    await dotsVisibilityApplied;
+    // Other settings writes may finish while this visibility projection waits.
+    // Return the latest saved selection rather than restoring an older one.
+    return settingsForRenderer();
   });
   // The settings:update body, named so a credential save persists through the
   // exact same normalization, runtime reconfigure and limit invalidation.
-  function applySettingsPatch(patch) {
+  function applySettingsPatch(patch, onDotsVisibilityRefresh = () => {}) {
     const contentRuntime = getSyncContentRuntime();
     credentialCommands.noteSettingsPatch(patch);
     const previousSettingsState = settings;
@@ -7430,6 +7578,8 @@ app.whenReady().then(() => {
       syncContentState: normalizeSyncContentState(settings.syncContentState),
       deviceId: (patch.deviceId !== undefined ? String(patch.deviceId).trim() : settings.deviceId) || defaultDeviceId(),
       clients: patch.clients !== undefined ? clientsCsvForSetting(patch.clients, '') : clientsCsvForSetting(settings.clients, DEFAULT_CLIENTS),
+      codexDotsEnabled: parseBoolean(patch.codexDotsEnabled ?? settings.codexDotsEnabled, false),
+      codexDotsVisible: parseBoolean(patch.codexDotsVisible ?? settings.codexDotsVisible, true),
       customScanPaths: normalizeCustomScanPaths(patch.customScanPaths ?? settings.customScanPaths),
       refreshMs: Math.max(5000, Number(patch.refreshMs ?? settings.refreshMs ?? 15000)),
       glassOpacity: Math.max(0, Math.min(100, Number(patch.glassOpacity ?? settings.glassOpacity ?? 68))),
@@ -7439,6 +7589,7 @@ app.whenReady().then(() => {
       windowsBackdrop: normalizeWindowsBackdropMode(patch.windowsBackdrop ?? settings.windowsBackdrop),
       macBackdrop: normalizeMacBackdropMode(patch.macBackdrop ?? settings.macBackdrop),
       reduceMotion: motionPreferenceApi.normalize(patch.reduceMotion ?? settings.reduceMotion),
+      tokenNumberAnimation: tokenNumberAnimationApi.normalize(patch.tokenNumberAnimation ?? settings.tokenNumberAnimation),
       showLiveDot: patch.showLiveDot ?? settings.showLiveDot ?? true,
       showToolIcons: patch.showToolIcons ?? settings.showToolIcons ?? true,
       titleIconOnly: parseBoolean(patch.titleIconOnly ?? settings.titleIconOnly, false),
@@ -7458,6 +7609,8 @@ app.whenReady().then(() => {
       tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
       floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
       edgeDockEnabled: parseBoolean(patch.edgeDockEnabled ?? settings.edgeDockEnabled, false),
+      edgeDockRefreshEnabled: parseBoolean(patch.edgeDockRefreshEnabled ?? settings.edgeDockRefreshEnabled, false),
+      edgeDockRunningIndicatorEnabled: parseBoolean(patch.edgeDockRunningIndicatorEnabled ?? settings.edgeDockRunningIndicatorEnabled, true),
       edgeDockSide: normalizeEdgeDockSide(patch.edgeDockSide ?? settings.edgeDockSide),
       edgeDockOffset: normalizeEdgeDockOffset(patch.edgeDockOffset ?? settings.edgeDockOffset),
       edgeDockDisplayId: normalizeEdgeDockDisplayId(patch.edgeDockDisplayId ?? settings.edgeDockDisplayId),
@@ -7465,6 +7618,8 @@ app.whenReady().then(() => {
       edgeDockHaptic: parseBoolean(patch.edgeDockHaptic ?? settings.edgeDockHaptic, true),
       edgeDockWarnColors: parseBoolean(patch.edgeDockWarnColors ?? settings.edgeDockWarnColors, false),
       edgeDockMacBackdrop: normalizeEdgeDockBackdropMode(patch.edgeDockMacBackdrop ?? settings.edgeDockMacBackdrop),
+      edgeDockSize: normalizeEdgeDockSize(patch.edgeDockSize ?? settings.edgeDockSize),
+      edgeDockCustomScale: normalizeEdgeDockCustomScale(patch.edgeDockCustomScale ?? settings.edgeDockCustomScale),
       // `null` is a real value here (back to the automatic default), so the
       // patch is checked for presence rather than coalesced.
       edgeDockItems: normalizeEdgeDockItems('edgeDockItems' in (patch || {}) ? patch.edgeDockItems : settings.edgeDockItems),
@@ -7633,6 +7788,14 @@ app.whenReady().then(() => {
     } else {
       if (runtimeChange.usageStructural) {
         reconfigureUsageRuntimeForMode();
+      } else if (previousRuntimeSettings.codexDotsVisible !== settings.codexDotsVisible) {
+        const dotsVisibilityApplied = Promise.resolve(deviceRuntimeHandle?.setCodexDotsVisible(settings.codexDotsVisible));
+        onDotsVisibilityRefresh(dotsVisibilityApplied);
+        // Keep failure observable to settings:update without an unhandled
+        // rejection for callers that use the synchronous settings path.
+        dotsVisibilityApplied.catch((error) => {
+          console.log(`[collector] Dots visibility refresh failed: ${error.message}`);
+        });
       }
       if (runtimeChange.limitsReconfigure && deviceRuntimeHandle) {
         deviceRuntimeHandle.reconfigureLimits(electronLimitsConfig());
@@ -7700,6 +7863,9 @@ app.whenReady().then(() => {
     syncNativeMaterialVisibility(win, nativeMaterialOptions({ ...settings, ...patch }, win === dashboardWindow));
     if (patch && patch.zoomFactor !== undefined && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.setZoomFactor(clampZoom(patch.zoomFactor));
+    }
+    if (patch && patch.edgeDockCustomScale !== undefined && edgeDockController?.isRunning()) {
+      edgeDockController.previewScale(patch.edgeDockCustomScale);
     }
     return true;
   });
@@ -7811,7 +7977,17 @@ app.whenReady().then(() => {
     return true;
   });
   ipcMain.handle('stats:get', async (_event, options) => {
-    const stats = await fetchStats(options);
+    const revision = statsPushRevision;
+    const fetched = await (options?.force === true && options?.feedback === true ? refreshManualStats() : fetchStats(options));
+    // A push from the same source/generation supersedes its pending read. A
+    // retried read after a Hub switch must adopt the new source instead.
+    // Compare the source of the revision, not the latest local composition:
+    // a local B publication must not relabel a revision advanced by Hub A.
+    const sameSource = statsPushSource?.generation === hubModeGeneration
+      && statsPushSource.identity === currentHubStatsIdentity();
+    const current = sameSource && statsPushRevision !== revision && latestStats ? latestStats : fetched;
+    if (current !== latestStats) sendPush({ event: 'stats', data: { stats: current, reason: 'read' } }, { skipExport: true });
+    const stats = latestStats || current;
     // The stream normally carries the stamp, but it is precisely when the stream
     // is down that this read is the only thing still arriving from the hub.
     maybeAdoptSharedSubscriptionRevision(stats);
@@ -7847,7 +8023,9 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('session:getDetail', (_event, args) => {
     const { client, sessionId, period, sessionCost } = args || {};
-    return readSessionDetailForPlatform({ client, sessionId, period, sessionCost });
+    return readSessionDetailForPlatform({ client, sessionId, period, sessionCost }, {
+      lookupModelPricing, getPricingRevision: () => pricingFingerprint({ pricingPath: customPricingPath() })
+    });
   });
   ipcMain.handle('stream:status', () => ({ connected: streamConnected, mode, ...(streamFailure || {}) }));
   ipcMain.handle('serviceStatus:get', (_event, options) => serviceStatusClient.getServiceStatus({

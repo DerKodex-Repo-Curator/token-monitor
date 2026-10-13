@@ -752,7 +752,7 @@ test('DeepSeek and MiniMax API key panels come from the generic account form', (
   const forms = limitAccountFormsForRenderer();
   const expectedFields = {
     deepseek: [['deepseekApiKey', 'password']],
-    minimax: [['minimaxApiRegion', 'select'], ['minimaxApiKey', 'password']]
+    minimax: [['minimaxBillingMode', 'select'], ['minimaxApiRegion', 'select'], ['minimaxApiKey', 'password']]
   };
   for (const id of ['deepseek', 'minimax']) {
     assert.doesNotMatch(html, new RegExp(`id="${id}(AccountGroup|ManualPanel|ApiKeyInput)"`), id);
@@ -791,7 +791,11 @@ test('DeepSeek and MiniMax API key panels come from the generic account form', (
       cn: 'https://platform.minimaxi.com/user-center/payment/token-plan',
       en: 'https://platform.minimax.io/user-center/payment/token-plan'
     },
-    default: 'https://platform.minimaxi.com/user-center/payment/token-plan'
+    default: 'https://platform.minimaxi.com/user-center/payment/token-plan',
+    pathByField: {
+      byField: 'minimaxBillingMode',
+      values: { 'token-plan': '/user-center/payment/token-plan', api: '/user-center/payment/balance' }
+    }
   });
 
   // The region is a plain setting beside the credential, so Clear leaves it
@@ -804,7 +808,7 @@ test('DeepSeek and MiniMax API key panels come from the generic account form', (
   for (const { labelKey } of region.options) {
     assert.match(labelKey, /^settings\.minimax\./, labelKey);
   }
-  assert.deepEqual(minimax.top, [{ field: 'minimaxApiRegion' }]);
+  assert.deepEqual(minimax.top, [{ field: 'minimaxBillingMode' }, { field: 'minimaxApiRegion' }]);
 
   // The region never becomes a credential: no store path, so it stays in
   // settings.json only after a selection; an implicit default stays empty.
@@ -1713,10 +1717,13 @@ test('an account message survives the stats re-renders until its own condition r
 
 test('account credentials persist through the settings:update body, not a second write path', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const updateHandler = main.slice(main.indexOf("ipcMain.handle('settings:update'"), main.indexOf('function applySettingsPatch(patch) {'));
-  assert.match(updateHandler, /const result = applySettingsPatch\(patch\);/);
+  const patchStart = main.indexOf('function applySettingsPatch(');
+  assert.ok(patchStart >= 0);
+  const updateHandler = main.slice(main.indexOf("ipcMain.handle('settings:update'"), patchStart);
+  assert.match(updateHandler, /applySettingsPatch\(patch, \(refresh\) => \{ dotsVisibilityApplied = refresh; \}\)/);
+  assert.match(updateHandler, /await dotsVisibilityApplied;/);
   assert.match(main, /createCredentialCommands\(\{\s*getSettings: \(\) => settings,\s*applySettingsPatch,\s*probeDeps: credentialProbeDeps\s*\}\)/);
-  const body = main.slice(main.indexOf('function applySettingsPatch(patch) {'), main.indexOf("ipcMain.handle('appearance:preview'"));
+  const body = main.slice(patchStart, main.indexOf("ipcMain.handle('appearance:preview'"));
   assert.match(body, /credentialCommands\.noteSettingsPatch\(patch\);/);
   assert.match(body, /normalizeAccountPatch\(patch, normalizedPatch\)/);
   assert.match(body, /return settingsForRenderer\(\);\n {2}\}\n\s*$/);

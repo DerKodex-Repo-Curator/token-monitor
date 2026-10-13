@@ -26,7 +26,7 @@
 
 ## O que é o Token Monitor?
 
-Um widget de desktop que mostra o uso de tokens ao vivo e os Limites de Ferramentas de IA em 43+ ferramentas de programação com IA — Claude Code, Codex, Cursor, GitHub Copilot, Cherry Studio e muitas outras — com sincronização multidispositivo em tempo real, tendências de uso histórico e detalhamentos por ferramenta, dispositivo, modelo, sessão ou projeto.
+Um widget de desktop que mostra o uso de tokens ao vivo e os Limites de Ferramentas de IA em 44+ ferramentas de programação com IA — Claude Code, Codex, Cursor, GitHub Copilot, Cherry Studio e muitas outras — com sincronização multidispositivo em tempo real, tendências de uso histórico e detalhamentos por ferramenta, dispositivo, modelo, sessão ou projeto.
 
 ## Ferramentas suportadas
 
@@ -60,6 +60,7 @@ O Token Monitor suporta uso de tokens, verificação de limites da conta e detal
 | <img src=".github/assets/tools-icon/codebuddy.png" width="28" alt="CodeBuddy" /> | CodeBuddy | `~/.codebuddy/projects/` + IDE / VS Code extension logs | ✅ | — | ✅ |
 | <img src=".github/assets/tools-icon/workbuddy.png" width="28" alt="WorkBuddy" /> | WorkBuddy | `~/.workbuddy/projects/`, `~/.workbuddy/workbuddy.db` | ✅ | ✅ | ✅ |
 | <img src=".github/assets/tools-icon/proma.png" width="28" alt="Proma" /> | Proma | `~/.proma/agent-sessions/*.jsonl` | ✅ | — | — |
+| <img src=".github/assets/tools-icon/catpaw.png" width="28" alt="CatPaw" /> | CatPaw | `<platform-app-data>/` (`catpaw-moon/`, `catpaw-overseas/`, `catpaw-memory-*.db`) | ✅ | — | — |
 | <img src=".github/assets/tools-icon/qoder.png" width="28" alt="Qoder" /> | Qoder | `~/.qoder-cn/projects/**/*.jsonl`, legado `<platform-app-data>/QoderCN/SharedClientCache/cache/db/local.db` (somente CN) | ✅ | ✅ | — |
 | <img src=".github/assets/tools-icon/reasonix.png" width="28" alt="Reasonix" /> | Reasonix | `~/.reasonix/` (`stats/`, `sessions/`, `projects/*/sessions/`) | ✅ | — | — |
 | <img src=".github/assets/tools-icon/deepseek.png" width="28" alt="DeepSeek" /> | DeepSeek / DeepSeek Harness | `~/.dsh/sessions/` (`session.jsonl`, `session.jsonl.zstd`) | ✅ | ✅ | ✅ |
@@ -84,13 +85,14 @@ O Token Monitor suporta uso de tokens, verificação de limites da conta e detal
 <br>
 
 - Os caminhos acima são os padrões. O Token Monitor segue as mesmas sobrescritas de ambiente que o Tokscale — `$XDG_DATA_HOME` para as raízes `~/.local/share/` e variáveis por ferramenta como `$CODEX_HOME`, `$GROK_HOME`, `$HERMES_HOME`, `$KIMI_CODE_HOME`, `$UNSLOTH_STUDIO_HOME`, `$LM_STUDIO_HOME`, `$DSH_HOME`, `$REASONIX_STATE_HOME`, `$REASONIX_HOME` e a família `$CLINE_*`.
+- CatPaw vem desativado por padrão; ative-o em Settings → tools. Lê os bancos de dados do assistente nas edições chinesa e internacional no macOS e Windows. Veja [as notas de origem do CatPaw](docs/providers/catpaw.md) para caminhos e limites da verificação.
 - O acompanhamento do LM Studio cobre atualmente requisições compatíveis com OpenAI `/v1/chat/completions` e `/v1/responses` registradas nos logs do servidor. Conversas iniciadas na interface de chat integrada do LM Studio e requisições nativas `/api/v1/chat` não são incluídas.
 - O Unsloth Studio acompanha o uso de inferência a partir do `studio.db`: os chats do Studio e a sua API local. A inferência local tem custo de API zero; provedores medidos reconhecidos usam as estimativas de preço do Tokscale. Tokens de treinamento não são incluídos. Veja as [notas da origem do Unsloth](docs/providers/unsloth.md).
 - O Devin acompanha as sessões do Devin CLI no `sessions.db` local e as sessões de agente do Devin Desktop nos logs ACP `acp-events`; quando ambos cobrem a mesma sessão, o banco do CLI é a fonte autoritativa. A cobertura do Desktop depende do agente ACP conectado: apenas agentes que gravam eventos `usage_update` localmente são contados, e o agente `devin-cloud` padrão do Devin Desktop mede o uso no servidor, então uma configuração padrão do Desktop não informa tokens do Desktop. Os títulos das sessões e a atribuição de projetos vêm do banco do CLI. Veja as [notas da origem do Devin](docs/providers/devin.md).
 - O MiniMax Code lê o histórico local de sessões gravado pelo CLI em `~/.minimax` ou `MINIMAX_DATA_DIR` / `MAVIS_DATA_DIR` (também em `~/.mavis` e `~/.minimax-<profile>` / `~/.mavis-<profile>`), além das execuções capturadas com `tokscale headless mcode`; um turno encontrado nas duas fontes é contado uma única vez.
 
 - As transcrições do Command Code não contêm contagens reais de tokens nem metadados de modelo por mensagem. O uso de tokens é estimado a partir do texto das transcrições, enquanto a atribuição de modelo e o custo derivado podem refletir o modelo configurado no momento, e não o modelo usado historicamente em cada requisição.
-- O cache do Cursor vem da exportação de uso no nível da conta do Cursor, então cobre o uso do Cursor IDE, do Cursor CLI e do Grok Bot. O Token Monitor detecta automaticamente as contas com login pelo aplicativo desktop do Cursor e também permite adicionar contas manualmente nas Configurações. O cache ressincroniza sozinho quando fica desatualizado, mas sessões recém-concluídas podem levar alguns minutos para chegar ao painel do Cursor, então o uso é atualizado na sincronização, não na hora.
+- O cache do Cursor vem da exportação de uso no nível da conta do Cursor, então cobre o uso do Cursor IDE, do Cursor CLI e do Grok Bot. O Token Monitor detecta automaticamente as contas com login pelo aplicativo desktop do Cursor e também permite adicionar contas manualmente nas Configurações. O cache ressincroniza sozinho quando fica desatualizado, mas sessões recém-concluídas podem levar alguns minutos para chegar ao painel do Cursor, então o uso recente ainda pode aparecer com atraso.
 
 - O mapeamento personalizado associa campos JSON numéricos de um único endpoint GET de saldo; compatibilidade apenas com OpenAI ou Anthropic não é suficiente.
 - O Qoder CN vem desativado por padrão; ative-o em Configurações → ferramentas. As sessões atuais são arquivos JSONL em `~/.qoder-cn/projects` (`TOKEN_MONITOR_QODER_CN_PROJECTS_PATH` e, depois, `QODERCN_CONFIG_DIR/projects`); versões mais antigas usavam um banco SQLite, sobrescrevível com `TOKEN_MONITOR_QODER_CN_DB_PATH`. Uma fonte ilegível mantém a última leitura completa. Sessões do banco legado registram apenas o nome do projeto, então aparecem sem projeto. Linhas JSONL faturadas por plano que informam créditos mas nenhuma contagem de tokens são omitidas dos totais de tokens; esses créditos permanecem nos Limites de Ferramentas de IA, e as linhas BYOK com tokens medidos são contadas. Veja as [notas da origem do Qoder](docs/providers/qodercn.md).
@@ -126,7 +128,7 @@ A maioria dos monitores de uso só é útil na máquina em que roda. O Token Mon
 
 ### Acompanhamento de uso
 
-- **Rastreamento de tokens ao vivo** — Claude Code, Codex, Cursor, GitHub Copilot, Antigravity, OpenCode e 35+ ferramentas de IA, com a interface atualizando poucos segundos após cada turno (lista completa na tabela acima)
+- **Rastreamento de tokens ao vivo** — Claude Code, Codex, Cursor, GitHub Copilot, Antigravity, OpenCode e 36+ ferramentas de IA, com a interface atualizando poucos segundos após cada turno (lista completa na tabela acima)
 - **Taxa de tokens ao vivo** — uma leitura opcional da velocidade de geração em `tok/s` ou do consumo total em `tok/min`
 - **Detalhes por sessão** — abra uma sessão para ver os tokens por prompt, expansível até a divisão exata de tokens de cada resposta e as ferramentas usadas (lido sob demanda de transcrições ou bancos locais, nunca sincronizado)
 - **Estatísticas de acerto de cache** — clique em qualquer ferramenta ou modelo para expandir um detalhamento completo dos tokens de entrada (acerto no cache vs. fora do cache), tokens de saída e as porcentagens de acerto
@@ -151,6 +153,7 @@ A maioria dos monitores de uso só é útil na máquina em que roda. O Token Mon
 - **Sincronização multidispositivo em tempo real** — a sincronização via hub usa Server-Sent Events para enviar atualizações a outros dispositivos em segundos; a sincronização pelo iCloud Drive é eventualmente consistente
 - **Local-first** — nenhum servidor é necessário para uso em um único dispositivo
 - **Backend de sincronização auto-hospedado** — hub dentro do widget, hub em CLI Node ou Cloudflare Worker
+- **Agente headless** — envia o uso de servidores, hosts SSH e WSL sem o app de desktop; veja [Agente headless](#agente-headless)
 - **Suporte a widgets do iOS** — Widgy e Scriptable através do hub do Worker
 - **Privacidade em primeiro lugar** — prompts, respostas, código-fonte e conteúdo dos arquivos ficam na sua máquina
 
@@ -190,7 +193,7 @@ O modo local é o padrão: abra o app e ele começa a acompanhar este dispositiv
 
 ## Sincronização multidispositivo
 
-Escolha UM backend de sincronização multidispositivo para os seus dispositivos (e para eventuais agentes headless). Em cada dispositivo, abra o widget e escolha um modo em Configurações → Sincronização multidispositivo. O widget contribui automaticamente com o uso deste dispositivo; execute `npm run agent` apenas em máquinas sem widget. O iCloud Drive é uma opção exclusiva do widget no macOS e não oferece suporte a agentes headless.
+Escolha UM backend de sincronização multidispositivo para os seus dispositivos (e para eventuais agentes headless). Em cada dispositivo, abra o widget e escolha um modo em Configurações → Sincronização multidispositivo. O widget contribui automaticamente com o uso deste dispositivo; execute o [agente headless](#agente-headless) apenas em máquinas sem widget. O iCloud Drive é uma opção exclusiva do widget no macOS e não oferece suporte a agentes headless.
 
 #### Opção A — Hospedar o hub a partir do widget (mais fácil, sem CLI)
 
@@ -227,6 +230,20 @@ Cole a URL implantada no widget de cada dispositivo em Configurações → Sincr
 
 Em cada Mac com login no mesmo Apple ID, escolha **iCloud Drive** em Configurações → Sincronização multidispositivo. Este é um caminho opcional exclusivo do macOS: o Token Monitor grava um snapshot atômico por dispositivo e um snapshot de assinaturas por escritor em `iCloud Drive/Token Monitor/sync-v1/`, e depois cada Mac agrega localmente os arquivos válidos. Não usa nenhum servidor do Token Monitor, CloudKit ou credenciais; as chaves de API dos provedores, cookies e tokens ficam locais. O iCloud Drive é eventualmente consistente, então outro Mac pode levar um instante para aparecer ou atualizar, e um arquivo ausente ou corrompido nunca limpa a última agregação válida.
 
+### Agente headless
+
+Execute o agente headless em servidores, hosts SSH ou dentro do WSL — em qualquer lugar onde você usa ferramentas de IA sem o widget de desktop. Ele coleta o uso dessa máquina e o envia ao seu hub (Opção A, B ou C). Requer Node.js 22.15+ e git.
+
+```bash
+git clone https://github.com/Javis603/token-monitor.git
+cd token-monitor
+npm ci
+cp .env.example .env              # defina TOKEN_MONITOR_HUB_URL, TOKEN_MONITOR_SECRET e um TOKEN_MONITOR_DEVICE_ID único
+npm run agent                     # execução contínua
+```
+
+Veja [docs/headless-agent.md](docs/headless-agent.md) para executá-lo como serviço, atualizar, desinstalar e solucionar problemas. Para ferramentas com backend SQLite dentro do WSL, siga a [configuração do WSL com SQLite](docs/wsl-sqlite-setup.md).
+
 ## Dados do app
 
 O estado do app fica no diretório de dados do usuário do sistema — apague-o junto com o app para desinstalar por completo.
@@ -252,7 +269,7 @@ npm run pack         # unpacked app dir (no installer), for quick local testing
 
 A saída vai para `dist/`. Windows e Linux usam o script `dist:*` correspondente acima no SO de destino. Empacotar a versão de lançamento do macOS exige uma identidade de assinatura local do tipo Developer ID Application; use `npm start` para desenvolvimento local ou em plataformas sem suporte.
 
-Os scripts de execução e de empacotamento garantem explicitamente o binário fixado do tokscale nos quatro alvos vendorizados. As demais plataformas de origem mantêm o binário do npm e filtram os clientes que ele não suporta; `npm install`, o lint e os testes não baixam esse binário.
+Os scripts de execução e de empacotamento garantem explicitamente o binário fixado do tokscale em cada alvo com um build vendorizado. As demais plataformas de origem mantêm o binário do npm e filtram os clientes que ele não suporta; `npm install`, o lint e os testes não baixam esse binário.
 
 ## Como funciona
 
@@ -261,8 +278,8 @@ Modo A — Local (padrão, sem configuração)
     widget (Electron) ──▶ tokscale ──▶ ~/.claude, ~/.codex, $HERMES_HOME
 
 Modo B — Sincronização (opcional, multidispositivo)
-    agente do dispositivo A ──▶
-    agente do dispositivo B ──▶  hub  ──▶  widget em qualquer dispositivo
+    widget do dispositivo A ──▶
+    widget do dispositivo B ──▶  hub  ──▶  widget em qualquer dispositivo
     agente do dispositivo C ──▶
 ```
 
@@ -296,7 +313,7 @@ Este arquivo cobre apenas os dias que o Token Monitor já observou; dados exclu�
 Há dois lugares para configurar o Token Monitor; o uso no dia a dia precisa apenas do primeiro:
 
 - **Widget (interface gráfica)** — clique no botão `⚙` no canto inferior direito. Seções, na ordem: Geral (idioma, iniciar ao entrar no sistema, atualizações), Principal (módulos da Home e moeda de exibição), Janela (comportamento da janela, layout da barra de menus e da bolha flutuante, modo de bandeja, atalho), Aparência (tema e cores dos fornecedores), Coleta (ferramentas acompanhadas, frequência de coleta, Preservar o uso de sessões excluídas, exportação de dados), Limites de Ferramentas de IA (seleção de provedores, limites e credenciais), Assinaturas (o que você paga por conta) e Sincronização multidispositivo. O botão `⇧` na barra de título alterna o comportamento da janela.
-- **Agente headless e hub** — sem interface; configurados por um arquivo `.env` na raiz do projeto (copie de `.env.example`), com precedência: flag de CLI → variável de ambiente → padrão interno.
+- **Agente headless e hub** — sem interface; configurados por um arquivo `.env` na raiz do projeto (copie de `.env.example`), com precedência: flag de CLI → variável de ambiente → padrão interno. Veja [docs/configuration.md](docs/configuration.md#headless-agent--hub-env).
 
 Consulte a [referência de configuração](docs/configuration.md) para ver todas as configurações e todas as variáveis de ambiente.
 
