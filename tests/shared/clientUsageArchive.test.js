@@ -1227,6 +1227,48 @@ test('larger live snapshots retain disjoint archive-only records without taking 
   assert.equal(history.reduce((sum, row) => sum + row.cost, 0), 4);
 });
 
+for (const [archivedClient, archivedModel, liveClient, liveModel] of [
+  ['claude', 'opus', 'claude', 'unknown'],
+  ['claude', 'opus', 'unknown', 'unknown'],
+  ['claude', 'unknown', 'claude', 'opus'],
+  ['unknown', 'unknown', 'claude', 'opus'],
+  ['pi', 'gpt', 'omp', 'unknown']
+]) {
+  test(`unidentified snapshot overlap ${archivedClient}/${archivedModel} to ${liveClient}/${liveModel} does not double count`, () => {
+    const date = '2026-09-01';
+    const previous = { days: { [date]: { observations: [
+      { client: archivedClient, modelId: archivedModel, tokens: 100, cost: 1 }
+    ] } } };
+    const live = capturedPeriod([[liveClient, liveModel, 120, 1.2]]);
+    const archive = captureLiveDailyHistory(previous, live, { todayKey: date });
+    const before = JSON.stringify(archive);
+    const [history] = parseGraphResult(graphFromDailyHistoryArchive([], archive)).contributions;
+    assert.equal(history.tokens, 120);
+    assert.equal(history.cost, 1.2);
+    const cumulative = allTimeCumulativeFromArchive(archive);
+    const present = { allTime: normalizePeriod(live) };
+    assert.strictEqual(applyDailyHistoryAllTimeFloor(present, cumulative), present);
+    const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), cumulative).allTime;
+    assert.equal(restored.totalTokens, 120);
+    assert.equal(restored.costUsd, 1.2);
+    assert.strictEqual(applyDailyHistoryAllTimeFloor({ allTime: restored }, cumulative).allTime, restored);
+    assert.equal(JSON.stringify(archive), before);
+  });
+}
+
+test('an unidentified model in a different client partition is still independently retained', () => {
+  const date = '2026-09-01';
+  let archive = captureDailyHistoryArchive({}, capturedGraph(date, [['codex', 'unknown', 100, 1]]));
+  archive = captureLiveDailyHistory(archive, capturedPeriod([['claude', 'unknown', 120, 1.2]]), { todayKey: date });
+  const [history] = parseGraphResult(graphFromDailyHistoryArchive([], archive)).contributions;
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(history.tokens, 220);
+  assert.equal(history.cost, 2.2);
+  assert.equal(restored.totalTokens, 220);
+  assert.equal(restored.clients.codex, 100);
+  assert.equal(restored.clients.claude, 120);
+});
+
 test('preserving archive-only records updates selected native component summaries and keeps legacy provenance', () => {
   const date = '2026-08-01';
   let archive = { days: { [date]: { observations: [

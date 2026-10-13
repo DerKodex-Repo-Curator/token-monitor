@@ -639,6 +639,7 @@ function withArchiveOnlyObservations(day, previousDay) {
       }
     }
   }
+  const currentObservations = Object.values(day.observations);
   for (const [observation, components] of selectedDayComponents(previousDay)) {
     const key = observationKey(observation);
     if (observations[key]) continue;
@@ -646,7 +647,15 @@ function withArchiveOnlyObservations(day, previousDay) {
     const family = CLIENT_IDENTITY_SPLITS.find(({ merged, split }) => (
       legacy && (observation.client === merged || observation.client === split)
     ));
-    if (family && Object.values(day.observations).some((current) => (
+    // Missing attribution is not evidence that the old source disappeared.
+    if (currentObservations.some((current) => {
+      if (num(current.tokens) <= 0 && (num(observation.tokens) > 0 || num(current.cost) <= 0)) return false;
+      if (current.client === 'unknown' || observation.client === 'unknown') return true;
+      const sameClient = current.client === observation.client
+        || (family && (current.client === family.merged || current.client === family.split));
+      return sameClient && (current.modelId === 'unknown' || observation.modelId === 'unknown');
+    })) continue;
+    if (family && currentObservations.some((current) => (
       (current.client === family.merged || current.client === family.split) && current.modelId === observation.modelId
     ))) continue;
     changed = true;
