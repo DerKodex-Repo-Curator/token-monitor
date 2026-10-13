@@ -12,6 +12,7 @@ const {
   usageTransformSettings
 } = require('../../src/shared/usage/usageTransform');
 const { normalizePeriod } = require('../../src/shared/usage');
+const { captureDailyHistoryArchive, captureLiveDailyHistory } = require('../../src/shared/dailyHistoryArchive');
 
 const AT = '2026-07-09T08:15:00.000Z';
 
@@ -262,3 +263,44 @@ test('a failed archive read is not cached, so the next tick retries at the same 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const cost of [1.2, 0]) {
+  test(`the disk-backed floor refreshes to a larger repriced snapshot costing ${cost}`, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-floor-reprice-'));
+    const archivePath = path.join(dir, 'daily-history-archive.json');
+    const date = '2026-07-09';
+    const period = (tokens, amount) => normalizePeriod({
+      totalTokens: tokens, costUsd: amount,
+      clients: { codex: tokens }, clientCosts: { codex: amount },
+      models: { gpt: tokens }, modelCosts: { gpt: amount },
+      clientModels: { codex: { gpt: tokens } }, clientModelCosts: { codex: { gpt: amount } }
+    });
+    const record = (allTime) => ({ updatedAt: AT, today: period(0, 0), month: period(0, 0), allTime });
+    try {
+      let archive = captureLiveDailyHistory({}, period(100, 10), { todayKey: date, pricingRevision: 'old' });
+      fs.writeFileSync(archivePath, JSON.stringify(archive));
+      fs.utimesSync(archivePath, 1000, 1000);
+      const transform = createUsageTransform({
+        store: fakeStore(), getSettings: () => ({ projectsEnabled: false }),
+        dailyHistoryArchive: { path: archivePath }
+      });
+      const emptySessions = { version: 1, sessions: {} };
+      assert.equal(transform.project(record(period(0, 0)), emptySessions, new Date(AT)).allTime.costUsd, 10);
+      archive = captureDailyHistoryArchive(archive, { contributions: [{ date, clients: [{
+        client: 'codex', modelId: 'gpt', tokens: { input: 120, output: 0, cacheRead: 0, cacheWrite: 0 }, cost
+      }] }] }, { todayKey: date, pricingRevision: 'new', reprice: true });
+      fs.writeFileSync(archivePath, JSON.stringify(archive));
+      fs.utimesSync(archivePath, 2000, 2000);
+      const present = transform.project(record(period(120, cost)), emptySessions, new Date(AT));
+      assert.equal(present.allTime.totalTokens, 120);
+      assert.equal(present.allTime.costUsd, cost);
+      const removed = transform.project(record(period(0, 0)), emptySessions, new Date(AT));
+      assert.equal(removed.allTime.totalTokens, 120);
+      assert.equal(removed.allTime.costUsd, cost);
+      assert.equal(removed.today.totalTokens, 0);
+      assert.equal(removed.month.totalTokens, 0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

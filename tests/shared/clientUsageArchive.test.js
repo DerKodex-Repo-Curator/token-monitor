@@ -817,7 +817,15 @@ test('the floor restores a model that carried cost but no tokens', () => {
 
 // --- merged-era Pi / Oh My Pi split (issue #808, author repro) ---
 
-const { allTimeCumulativeFromArchive } = require('../../src/shared/dailyHistoryArchive');
+const {
+  allTimeCumulativeFromArchive,
+  captureDailyHistoryArchive,
+  captureLiveDailyHistory,
+  graphFromDailyHistoryArchive,
+  normalizeDailyHistoryArchive
+} = require('../../src/shared/dailyHistoryArchive');
+const { normalizePeriod } = require('../../src/shared/usage');
+const { parseGraphResult } = require('../../src/shared/history');
 
 test('the floor does not recount a merged-era Pi row against split live usage', () => {
   // A day captured before the split: both products sit under `pi`, no generation
@@ -827,7 +835,8 @@ test('the floor does not recount a merged-era Pi row against split live usage', 
       observations: [{ client: 'pi', modelId: 'gpt', tokens: 100, cost: 6, messages: 2 }] }
   } };
   const cumulative = allTimeCumulativeFromArchive(archive);
-  assert.equal(cumulative.pi.mergedEra, true);
+  assert.equal(cumulative.pi.legacy.totalTokens, 100);
+  assert.equal(cumulative.pi.totalTokens, 0);
 
   // Live allTime reports the two clients apart: pi 60 + omp 40 = the same 100 the
   // merged row already holds. Comparing against pi alone would read the 40 as a
@@ -932,4 +941,394 @@ test('the floor restores history that only a live day retained', () => {
 
   assert.equal(floored.allTime.totalTokens, 50);
   assert.equal(floored.allTime.clients.codex, 50);
+});
+
+function capturedGraph(date, rows) {
+  return { contributions: [{ date, clients: rows.map(([client, modelId, tokens, cost, cacheRead = 0]) => ({
+    client, modelId, tokens: { input: tokens - cacheRead, cacheRead, output: 0, cacheWrite: 0 }, cost, messages: 1
+  })) }] };
+}
+
+function capturedPeriod(rows) {
+  const period = allTimeOnly({ modelCosts: {}, clientModelCosts: {} }).allTime;
+  for (const [client, model, tokens, cost] of rows) {
+    period.totalTokens += tokens;
+    period.costUsd += cost;
+    period.clients[client] = (period.clients[client] || 0) + tokens;
+    period.clientCosts[client] = (period.clientCosts[client] || 0) + cost;
+    period.models[model] = (period.models[model] || 0) + tokens;
+    period.modelCosts[model] = (period.modelCosts[model] || 0) + cost;
+    (period.clientModels[client] ||= {})[model] = (period.clientModels[client][model] || 0) + tokens;
+    (period.clientModelCosts[client] ||= {})[model] = (period.clientModelCosts[client][model] || 0) + cost;
+  }
+  return period;
+}
+
+for (const cost of [1.2, 0]) {
+  test(`a larger graph repriced to ${cost} does not resurrect an older live price, including after source removal`, () => {
+    const date = '2026-09-01';
+    let archive = captureLiveDailyHistory({}, capturedPeriod([['claude', 'opus', 100, 10]]), {
+      todayKey: date, pricingRevision: 'old'
+    });
+    archive = captureDailyHistoryArchive(archive, capturedGraph(date, [['claude', 'opus', 120, cost]]), {
+      todayKey: date, pricingRevision: 'new', reprice: true
+    });
+    const before = JSON.stringify(archive);
+    const cumulative = allTimeCumulativeFromArchive(archive);
+    assert.equal(cumulative.claude.costUsd, cost);
+    const present = { allTime: capturedPeriod([['claude', 'opus', 120, cost]]) };
+    assert.strictEqual(applyDailyHistoryAllTimeFloor(present, cumulative), present);
+    const removed = applyDailyHistoryAllTimeFloor(allTimeOnly({}), cumulative).allTime;
+    assert.equal(removed.totalTokens, 120);
+    assert.equal(removed.costUsd, cost);
+    assert.equal(JSON.stringify(archive), before, 'reduction must not mutate the archive');
+  });
+}
+
+test('repricing a larger source keeps archive-only recorded prices after source removal', () => {
+  let archive = captureDailyHistoryArchive({}, capturedGraph('2026-08-31', [['claude', 'deleted', 50, 5]]));
+  archive = captureLiveDailyHistory(archive, capturedPeriod([['claude', 'opus', 100, 10]]), {
+    todayKey: '2026-09-01', pricingRevision: 'old'
+  });
+  archive = captureDailyHistoryArchive(archive, capturedGraph('2026-09-01', [['claude', 'opus', 120, 0]]), {
+    todayKey: '2026-09-01', pricingRevision: 'new', reprice: true
+  });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 170);
+  assert.equal(restored.costUsd, 5);
+  assert.equal(restored.clientModelCosts.claude.deleted, 5);
+});
+
+test('the floor selects the same daily snapshot as history instead of mixing per-model maxima', () => {
+  const date = '2026-09-01';
+  let archive = captureLiveDailyHistory({}, capturedPeriod([
+    ['claude', 'a', 90, 9], ['claude', 'b', 20, 2]
+  ]), { todayKey: date });
+  archive = captureDailyHistoryArchive(archive, capturedGraph(date, [
+    ['claude', 'a', 100, 1], ['claude', 'b', 10, 0.1]
+  ]), { todayKey: date });
+  const selected = graphFromDailyHistoryArchive([], archive).contributions[0].clients;
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  assert.equal(cumulative.claude.totalTokens, 110);
+  assert.deepEqual({ ...cumulative.claude.models }, { a: 100, b: 10 });
+  assert.equal(cumulative.claude.costUsd, selected.reduce((sum, row) => sum + row.cost, 0));
+  const removed = applyDailyHistoryAllTimeFloor(allTimeOnly({}), cumulative).allTime;
+  assert.equal(removed.totalTokens, 110);
+  assert.deepEqual(removed.clientModels.claude, { a: 100, b: 10 });
+  assert.equal(removed.costUsd, 1.1);
+});
+
+test('a legacy committed day reconciles with same-day split live identities after source removal', () => {
+  const date = '2026-08-01';
+  const legacy = { days: { [date]: { date, observations: [
+    { client: 'pi', modelId: 'gpt', tokens: 100, cost: 1 }
+  ] } } };
+  const archive = captureLiveDailyHistory(legacy, capturedPeriod([
+    ['pi', 'gpt', 60, 0.6], ['omp', 'gpt', 40, 0.4]
+  ]), { todayKey: date });
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  const removed = applyDailyHistoryAllTimeFloor(allTimeOnly({}), cumulative);
+  assert.equal(removed.allTime.totalTokens, 100);
+  assert.equal(removed.allTime.costUsd, 1);
+  assert.equal(removed.allTime.clients.pi, 100);
+  assert.equal(removed.allTime.clients.omp, undefined);
+  assert.strictEqual(applyDailyHistoryAllTimeFloor(removed, cumulative), removed);
+});
+
+test('a later OMP increase cannot cover missing post-split Pi usage', () => {
+  let archive = { days: { '2026-08-01': { observations: [
+    { client: 'pi', modelId: 'gpt', tokens: 100, cost: 1 }
+  ] } } };
+  archive = captureDailyHistoryArchive(archive, capturedGraph('2026-09-01', [['pi', 'gpt', 50, 0.5]]));
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  const surviving = { allTime: capturedPeriod([['omp', 'gpt', 200, 2]]) };
+  const restored = applyDailyHistoryAllTimeFloor(surviving, cumulative);
+  assert.equal(restored.allTime.clients.pi, 50);
+  assert.equal(restored.allTime.clients.omp, 200);
+  assert.equal(restored.allTime.totalTokens, 250);
+  assert.equal(restored.allTime.costUsd, 2.5);
+  assert.strictEqual(applyDailyHistoryAllTimeFloor(restored, cumulative), restored);
+});
+
+test('legacy and post-split floors do not consume the same live usage twice', () => {
+  let archive = { days: { '2026-08-01': { observations: [
+    { client: 'pi', modelId: 'gpt', tokens: 100, cost: 1 }
+  ] } } };
+  archive = captureDailyHistoryArchive(archive, capturedGraph('2026-09-01', [
+    ['pi', 'gpt', 50, 0.5], ['omp', 'gpt', 30, 0.3]
+  ]));
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  for (const rows of [[], [['pi', 'gpt', 50, 0.5], ['omp', 'gpt', 30, 0.3]], [
+    ['pi', 'gpt', 110, 1.1], ['omp', 'gpt', 70, 0.7]
+  ]]) {
+    const summary = { allTime: capturedPeriod(rows) };
+    const restored = applyDailyHistoryAllTimeFloor(summary, cumulative);
+    assert.equal(restored.allTime.totalTokens, 180);
+    assert.ok(Math.abs(restored.allTime.costUsd - 1.8) < 1e-12);
+    assert.strictEqual(applyDailyHistoryAllTimeFloor(restored, cumulative), restored);
+  }
+});
+
+test('a partial restore leaves unidentified components unclassified instead of scaling the archived split', () => {
+  const archive = captureDailyHistoryArchive({}, capturedGraph('2026-09-01', [['claude', 'opus', 1000, 5, 600]]));
+  const surviving = capturedPeriod([['claude', 'opus', 400, 2]]);
+  Object.assign(surviving, {
+    cacheReadTokens: 400, clientCacheReads: { claude: 400 }, modelCacheReads: { opus: 400 },
+    capabilities: { tokenComponents: true }
+  });
+  const restored = applyDailyHistoryAllTimeFloor({ allTime: surviving }, allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 1000);
+  assert.equal(restored.cacheReadTokens, 400);
+  assert.equal(restored.clientCacheReads.claude, 400);
+  assert.equal(restored.modelCacheReads.opus, 400);
+  assert.equal(restored.unclassifiedTokens, 600);
+  assert.equal(restored.modelUnclassifiedTokens.opus, 600);
+  assert.equal(restored.capabilities.tokenComponents, false);
+});
+
+test('a larger component-less live reading retains measured counts without scaling them up', () => {
+  const date = '2026-09-01';
+  let archive = captureDailyHistoryArchive({}, capturedGraph(date, [['claude', 'opus', 1000, 5, 600]]));
+  archive = captureLiveDailyHistory(archive, capturedPeriod([['claude', 'opus', 1200, 6]]), { todayKey: date });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 1200);
+  assert.equal(restored.cacheReadTokens, 600);
+  assert.equal(restored.unclassifiedTokens, 200);
+  assert.equal(restored.capabilities.tokenComponents, false);
+});
+
+test('an exact plain-input restore does not lose component provenance', () => {
+  const archive = captureDailyHistoryArchive({}, capturedGraph('2026-09-01', [['claude', 'opus', 100, 1]]));
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 100);
+  assert.equal(restored.unclassifiedTokens, 0);
+  assert.equal(restored.capabilities.tokenComponents, true);
+});
+
+test('restoring a detailed model and an unknown model does not hide the unknown share', () => {
+  let archive = captureDailyHistoryArchive({}, capturedGraph('2026-09-01', [['claude', 'opus', 100, 1, 60]]));
+  archive = captureLiveDailyHistory(archive, capturedPeriod([['claude', 'sonnet', 50, 0.5]]), { todayKey: '2026-09-02' });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 150);
+  assert.equal(restored.cacheReadTokens, 60);
+  assert.equal(restored.unclassifiedTokens, 50);
+  assert.equal(restored.modelUnclassifiedTokens.sonnet, 50);
+  assert.equal(restored.capabilities.tokenComponents, false);
+  assert.equal(normalizePeriod(restored).unclassifiedTokens, 50);
+});
+
+test('mixed plain-input and unknown models retain exact zero-counter provenance', () => {
+  let archive = captureDailyHistoryArchive({}, capturedGraph('2026-09-01', [['claude', 'a', 100, 1]]));
+  archive = captureLiveDailyHistory(archive, capturedPeriod([['claude', 'b', 50, 0.5]]), { todayKey: '2026-09-02' });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 150);
+  assert.equal(restored.unclassifiedTokens, 50);
+  assert.deepEqual(restored.modelUnclassifiedTokens, { b: 50 });
+  assert.equal(normalizePeriod(restored).unclassifiedTokens, 50);
+});
+
+function withNativeComponents(period, cacheReadTokens, outputTokens = 0, unclassifiedTokens = 0) {
+  const client = Object.keys(period.clients)[0];
+  const model = Object.keys(period.models)[0];
+  return {
+    ...period, cacheReadTokens, outputTokens, unclassifiedTokens,
+    clientCacheReads: { [client]: cacheReadTokens }, modelCacheReads: { [model]: cacheReadTokens },
+    clientOutputs: { [client]: outputTokens }, modelOutputs: { [model]: outputTokens },
+    clientUnclassifiedTokens: { [client]: unclassifiedTokens }, modelUnclassifiedTokens: { [model]: unclassifiedTokens },
+    capabilities: { tokenComponents: unclassifiedTokens === 0 }
+  };
+}
+
+for (const tokens of [100, 120]) {
+  test(`a selected native live summary keeps measured components for ${tokens} tokens after source removal`, () => {
+    const date = '2026-09-01';
+    const cacheReads = tokens === 100 ? 60 : 80;
+    let archive = captureDailyHistoryArchive({}, capturedGraph(date, [['claude', 'opus', 100, 1, 60]]));
+    const live = withNativeComponents(capturedPeriod([['claude', 'opus', tokens, 2]]), cacheReads, 10);
+    archive = captureLiveDailyHistory(archive, live, { todayKey: date });
+    const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+    assert.equal(restored.totalTokens, tokens);
+    assert.equal(restored.cacheReadTokens, cacheReads);
+    assert.equal(restored.outputTokens, 10);
+    assert.equal(restored.unclassifiedTokens, 0);
+    assert.equal(restored.capabilities.tokenComponents, true);
+    assert.equal(graphFromDailyHistoryArchive([], archive).contributions[0].tokenComponentSummary.cacheReadTokens, cacheReads);
+  });
+}
+
+test('a partial native summary preserves explicit unclassified counts during full restoration', () => {
+  const live = withNativeComponents(capturedPeriod([['claude', 'opus', 100, 1]]), 60, 10, 20);
+  const archive = captureLiveDailyHistory({}, live, { todayKey: '2026-09-01' });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.cacheReadTokens, 60);
+  assert.equal(restored.outputTokens, 10);
+  assert.equal(restored.unclassifiedTokens, 20);
+  assert.equal(restored.modelUnclassifiedTokens.opus, 20);
+  assert.equal(restored.capabilities.tokenComponents, false);
+});
+
+test('ambiguous client-by-model summary components are never estimated', () => {
+  const period = capturedPeriod([
+    ['claude', 'a', 100, 1], ['claude', 'b', 100, 1], ['codex', 'a', 100, 1], ['codex', 'b', 100, 1]
+  ]);
+  Object.assign(period, {
+    cacheReadTokens: 240, clientCacheReads: { claude: 120, codex: 120 }, modelCacheReads: { a: 120, b: 120 },
+    capabilities: { tokenComponents: true }
+  });
+  const archive = captureLiveDailyHistory({}, period, { todayKey: '2026-09-01' });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 400);
+  assert.equal(restored.cacheReadTokens, 0);
+  assert.equal(restored.unclassifiedTokens, 400);
+});
+
+test('a selected modern live snapshot does not inherit legacy identity from an unrelated committed row', () => {
+  const date = '2026-08-01';
+  let archive = { days: { [date]: { observations: [{ client: 'claude', modelId: 'opus', tokens: 100, cost: 1 }] } } };
+  archive = captureLiveDailyHistory(archive, capturedPeriod([
+    ['claude', 'opus', 100, 1], ['pi', 'gpt', 50, 0.5], ['omp', 'gpt', 50, 0.5]
+  ]), { todayKey: date });
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  assert.equal(cumulative.pi.legacy, undefined);
+  assert.equal(cumulative.pi.totalTokens, 50);
+  assert.equal(cumulative.omp.totalTokens, 50);
+  const surviving = { allTime: capturedPeriod([['claude', 'opus', 100, 1], ['omp', 'gpt', 100, 1]]) };
+  const restored = applyDailyHistoryAllTimeFloor(surviving, cumulative).allTime;
+  assert.equal(restored.totalTokens, 250);
+  assert.equal(restored.clients.pi, 50);
+});
+
+test('a larger split live snapshot replaces the legacy family instead of adding its merged row', () => {
+  const date = '2026-08-01';
+  let archive = { days: { [date]: { observations: [{ client: 'pi', modelId: 'gpt', tokens: 100, cost: 1 }] } } };
+  archive = captureLiveDailyHistory(archive, capturedPeriod([['omp', 'gpt', 120, 1.2]]), { todayKey: date });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 120);
+  assert.equal(restored.clients.pi, undefined);
+  assert.equal(restored.clients.omp, 120);
+  assert.equal(restored.costUsd, 1.2);
+});
+
+test('larger live snapshots retain disjoint archive-only records without taking overlapping model maxima', () => {
+  const date = '2026-09-01';
+  let archive = captureDailyHistoryArchive({}, capturedGraph(date, [
+    ['claude', 'a', 100, 1, 60], ['claude', 'b', 100, 1]
+  ]));
+  archive = captureLiveDailyHistory(archive, capturedPeriod([['claude', 'b', 300, 3]]), { todayKey: date });
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  assert.deepEqual({ ...cumulative.claude.models }, { b: 300, a: 100 });
+  const surviving = { allTime: capturedPeriod([['claude', 'b', 300, 3]]) };
+  const restored = applyDailyHistoryAllTimeFloor(surviving, cumulative).allTime;
+  assert.equal(restored.totalTokens, 400);
+  assert.equal(restored.costUsd, 4);
+  assert.equal(restored.cacheReadTokens, 60);
+  const history = graphFromDailyHistoryArchive([], archive).contributions[0].clients;
+  assert.equal(history.reduce((sum, row) => sum + row.tokens.input + row.tokens.cacheRead, 0), 400);
+  assert.equal(history.reduce((sum, row) => sum + row.cost, 0), 4);
+});
+
+test('preserving archive-only records updates selected native component summaries and keeps legacy provenance', () => {
+  const date = '2026-08-01';
+  let archive = { days: { [date]: { observations: [
+    { client: 'pi', modelId: 'gpt', tokens: 100, cost: 1, tokenComponentsAvailable: true, cacheReadTokens: 60 }
+  ] } } };
+  const live = withNativeComponents(capturedPeriod([['claude', 'opus', 200, 2]]), 80);
+  archive = captureLiveDailyHistory(archive, live, { todayKey: date });
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  assert.equal(cumulative.pi.legacy.totalTokens, 100);
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), cumulative).allTime;
+  assert.equal(restored.totalTokens, 300);
+  assert.equal(restored.cacheReadTokens, 140);
+  assert.equal(restored.unclassifiedTokens, 0);
+  const selected = graphFromDailyHistoryArchive([], archive).contributions[0];
+  assert.equal(selected.tokenComponentSummary.cacheReadTokens, 140);
+  assert.equal(selected.tokenComponentSummary.tokenComponentsAvailable, true);
+});
+
+test('summary overlay preserves exact zero-unclassified axes beside archive-only unknown usage', () => {
+  const date = '2026-08-01';
+  let archive = { days: { [date]: { observations: [{ client: 'pi', modelId: 'gpt', tokens: 100, cost: 1 }] } } };
+  const live = withNativeComponents(capturedPeriod([['claude', 'opus', 200, 2]]), 80);
+  archive = captureLiveDailyHistory(archive, live, { todayKey: date });
+  for (const value of [archive, normalizeDailyHistoryArchive(JSON.parse(JSON.stringify(archive)))]) {
+    const graph = graphFromDailyHistoryArchive([], value);
+    const [day] = parseGraphResult(graph).contributions;
+    assert.equal(day.unclassifiedTokens, 100);
+    assert.equal(day.perClient.claude.unclassifiedTokens, 0);
+    assert.equal(day.perClient.pi.unclassifiedTokens, 100);
+    assert.equal(day.perModel.opus.unclassifiedTokens, 0);
+    const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(value)).allTime;
+    assert.equal(restored.unclassifiedTokens, 100);
+    assert.equal(restored.cacheReadTokens, 80);
+  }
+});
+
+test('inexact native summaries preserve exact plain-input model axes through repeated normalization', () => {
+  const date = '2026-09-01';
+  const period = capturedPeriod([['claude', 'a', 100, 1], ['claude', 'b', 50, 0.5]]);
+  Object.assign(period, {
+    cacheReadTokens: 10, clientCacheReads: { claude: 10 }, modelCacheReads: { b: 10 },
+    unclassifiedTokens: 40, clientUnclassifiedTokens: { claude: 40 }, modelUnclassifiedTokens: { a: 0, b: 40 },
+    capabilities: { tokenComponents: false }
+  });
+  let archive = captureLiveDailyHistory({}, period, { todayKey: date });
+  archive = normalizeDailyHistoryArchive(normalizeDailyHistoryArchive(JSON.parse(JSON.stringify(archive))));
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  assert.equal(restored.totalTokens, 150);
+  assert.equal(restored.cacheReadTokens, 10);
+  assert.equal(restored.unclassifiedTokens, 40);
+  assert.deepEqual(restored.modelUnclassifiedTokens, { b: 40 });
+  assert.equal(parseGraphResult(graphFromDailyHistoryArchive([], archive)).contributions[0].perModel.a.unclassifiedTokens, 0);
+});
+
+test('adding archive-only tuples preserves native component attribution measured before the merge', () => {
+  const date = '2026-09-01';
+  let archive = captureDailyHistoryArchive({}, capturedGraph(date, [['codex', 'b', 100, 1, 60]]));
+  const live = capturedPeriod([['codex', 'a', 100, 1], ['opencode', 'a', 200, 2]]);
+  Object.assign(live, {
+    cacheReadTokens: 110, clientCacheReads: { codex: 30, opencode: 80 }, modelCacheReads: { a: 110 },
+    capabilities: { tokenComponents: true }
+  });
+  archive = captureLiveDailyHistory(archive, live, { todayKey: date });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  const [history] = parseGraphResult(graphFromDailyHistoryArchive([], archive)).contributions;
+  assert.equal(restored.totalTokens, 400);
+  assert.equal(restored.cacheReadTokens, 170);
+  assert.equal(restored.unclassifiedTokens, 0);
+  assert.equal(restored.modelCacheReads.a, 110);
+  assert.equal(restored.modelCacheReads.b, 60);
+  assert.equal(history.cacheReadTokens, 170);
+  assert.equal(history.unclassifiedTokens, 0);
+});
+
+test('cost-only observations never inherit another row\'s native token components', () => {
+  const date = '2026-09-01';
+  let archive = captureDailyHistoryArchive({}, capturedGraph(date, [['claude', 'deleted', 10, 0.1, 5]]));
+  const live = withNativeComponents(capturedPeriod([['claude', 'opus', 100, 2]]), 60);
+  live.modelCosts.opus = 1;
+  live.clientModelCosts.claude.opus = 1;
+  archive = captureLiveDailyHistory(archive, live, { todayKey: date });
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
+  const [history] = parseGraphResult(graphFromDailyHistoryArchive([], archive)).contributions;
+  assert.equal(restored.totalTokens, 110);
+  assert.equal(restored.cacheReadTokens, 65);
+  assert.equal(restored.costUsd, 2.1);
+  assert.equal(history.tokens, 110);
+  assert.equal(history.cacheReadTokens, 65);
+  assert.equal(history.perModel.unknown.tokens, 0);
+  assert.equal(history.cost, 2.1);
+});
+
+test('fractional legacy costs are idempotent without losing real tiny cost-only restores', () => {
+  let archive = { days: { '2026-08-01': { observations: [
+    { client: 'pi', modelId: 'gpt', tokens: 10000, cost: 0.1 }
+  ] } } };
+  archive = captureDailyHistoryArchive(archive, capturedGraph('2026-09-01', [['pi', 'gpt', 90000, 0.9]]));
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), cumulative);
+  assert.equal(restored.allTime.totalTokens, 100000);
+  assert.equal(restored.allTime.costUsd, 1);
+  assert.strictEqual(applyDailyHistoryAllTimeFloor(restored, cumulative), restored);
+  const tiny = { codex: { models: {}, modelCosts: { gpt: 1e-18 } } };
+  assert.equal(applyDailyHistoryAllTimeFloor(allTimeOnly({}), tiny).allTime.costUsd, 1e-18);
 });

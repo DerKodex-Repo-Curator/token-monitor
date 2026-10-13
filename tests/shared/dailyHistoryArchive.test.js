@@ -1229,7 +1229,7 @@ test('allTimeCumulativeFromArchive drops reserved key names and never pollutes t
   assert.equal(Object.prototype.totalTokens, before, 'Object.prototype is untouched');
 });
 
-test('allTimeCumulativeFromArchive folds liveDays in and takes the larger reading per pair', () => {
+test('allTimeCumulativeFromArchive includes live-only days and selects the larger daily snapshot', () => {
   const archive = {
     version: 1,
     days: { '2026-07-01': { date: '2026-07-01', clientIdentityGeneration: 2, observations: [

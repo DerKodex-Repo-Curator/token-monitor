@@ -32,7 +32,7 @@ function usageTransformSettings(settings = {}) {
   return picked;
 }
 
-// Reduces the daily history archive to the per-client allTime floor
+// Reduces the daily history archive to the per-(client, model) allTime floor
 // (applyDailyHistoryAllTimeFloor's input). The reduction walks every retained
 // day, so it is cached against the archive file's mtime: project() runs on every
 // tick while the archive only changes on a graph tick, and a watch tick must not

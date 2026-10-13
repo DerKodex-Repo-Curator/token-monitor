@@ -112,7 +112,7 @@ function normalizeComponentValues(value, totalTokens, exact) {
     ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
     ...(cacheWriteTokens > 0 ? { cacheWriteTokens } : {}),
     ...(outputTokens > 0 ? { outputTokens } : {}),
-    ...(unclassifiedTokens > 0 ? { unclassifiedTokens } : {})
+    ...(unclassifiedTokens > 0 || !exact ? { unclassifiedTokens } : {})
   };
 }
 
@@ -617,8 +617,61 @@ function graphTimeMetrics(graphs, activeTimeMs) {
   };
 }
 
-function graphFromDailyHistoryArchive(graphs, archive, options = {}) {
-  const normalizedArchive = normalizeDailyHistoryArchive(archive);
+function withArchiveOnlyObservations(day, previousDay) {
+  if (dayTokens(day) <= dayTokens(previousDay)) return day;
+  const observations = Object.fromEntries([...selectedDayComponents(day)].map(([observation, components]) => [
+    observationKey(observation), {
+      ...observation, ...components, tokenComponentsAvailable: components.unclassifiedTokens === 0
+    }
+  ]));
+  const summary = day.componentSummary ? {
+    ...day.componentSummary,
+    perClient: { ...day.componentSummary.perClient },
+    perModel: { ...day.componentSummary.perModel }
+  } : null;
+  let changed = false;
+  if (summary) {
+    const { perClient, perModel } = observationTokenMaps(day.observations);
+    for (const [field, tokens] of [['perClient', perClient], ['perModel', perModel]]) {
+      for (const key of Object.keys(tokens)) {
+        const part = summary[field][key] || {};
+        summary[field][key] = { ...part, unclassifiedTokens: num(part.unclassifiedTokens) };
+      }
+    }
+  }
+  for (const [observation, components] of selectedDayComponents(previousDay)) {
+    const key = observationKey(observation);
+    if (observations[key]) continue;
+    const legacy = isPreSplitEntry(previousDay);
+    const family = CLIENT_IDENTITY_SPLITS.find(({ merged, split }) => (
+      legacy && (observation.client === merged || observation.client === split)
+    ));
+    if (family && Object.values(day.observations).some((current) => (
+      (current.client === family.merged || current.client === family.split) && current.modelId === observation.modelId
+    ))) continue;
+    changed = true;
+    observations[key] = {
+      ...observation,
+      ...components,
+      tokenComponentsAvailable: components.unclassifiedTokens === 0,
+      clientIdentityGeneration: previousDay.clientIdentityGeneration ?? 0
+    };
+    if (!summary) continue;
+    if (components.unclassifiedTokens > 0) summary.tokenComponentsAvailable = false;
+    const client = { ...(summary.perClient[observation.client] || {}) };
+    const model = { ...(summary.perModel[observation.modelId] || {}) };
+    for (const [field, value] of Object.entries(components)) {
+      summary[field] = num(summary[field]) + value;
+      client[field] = num(client[field]) + value;
+      model[field] = num(model[field]) + value;
+    }
+    summary.perClient[observation.client] = client;
+    summary.perModel[observation.modelId] = model;
+  }
+  return changed ? { ...day, observations, ...(summary ? { componentSummary: summary } : {}) } : day;
+}
+
+function reconciledArchiveDays(graphs, normalizedArchive, options = {}) {
   const currentDays = observationsFromGraphs(graphs, { archive: normalizedArchive });
   const todayKey = String(options.todayKey || '').slice(0, 10);
   const hasTodayKey = DAY_KEY_RE.test(todayKey);
@@ -630,14 +683,21 @@ function graphFromDailyHistoryArchive(graphs, archive, options = {}) {
   for (const [date, liveDay] of Object.entries(normalizedArchive.liveDays || {})) {
     if (hasTodayKey && date > todayKey) continue;
     const previous = currentDays.get(date);
+    const live = { ...liveDay, clientIdentityGeneration: CLIENT_IDENTITY_GENERATION };
     if (!previous) {
-      currentDays.set(date, liveDay);
+      currentDays.set(date, live);
     } else {
-      const selected = liveDayIsGreater(liveDay, previous) ? mergeLiveDayMetadata(liveDay, previous) : previous;
-      currentDays.set(date, withReconciledGraphCosts(selected, previous, liveDay, options.reprice === true));
+      const selected = liveDayIsGreater(live, previous)
+        ? withArchiveOnlyObservations(mergeLiveDayMetadata(live, previous), previous) : previous;
+      currentDays.set(date, withReconciledGraphCosts(selected, previous, live, options.reprice === true));
     }
   }
 
+  return currentDays;
+}
+
+function graphFromDailyHistoryArchive(graphs, archive, options = {}) {
+  const currentDays = reconciledArchiveDays(graphs, normalizeDailyHistoryArchive(archive), options);
   const contributions = [...currentDays.values()]
     .sort((left, right) => left.date.localeCompare(right.date))
     .map((day) => ({
@@ -675,143 +735,89 @@ function graphFromDailyHistoryArchive(graphs, archive, options = {}) {
   return { contributions, ...(timeMetrics ? { timeMetrics } : {}) };
 }
 
-// The (client, model) usage the retained days still hold, folded onto the same
-// partition keys a live period uses so the totals can be compared directly: the
-// tokscale client name collapses to its tracked client id, and the model id to
-// the period's model key. The daily history archive outlives the source files it
-// was built from, so this cumulative is the floor allTime must not fall below
-// once a source is rotated away (issue #808). It is collapsed across days into a
-// per-(client, model) total — which specific days rotated is unknown and does
-// not matter to a floor, but which model rotated does, so the model grain is
-// kept.
 function periodModelKeyFor(client, model) {
   let name = String(model || '');
-  // Mirror the live period (usage.js reconcileCursorAutoGlobalModels): Cursor's
-  // Auto-mode requests arrive as `auto` or `default` and both fold to one row.
   if (client === 'cursor' && (name === 'auto' || name === 'default')) name = 'cursor-auto';
   return normalizeModelNameForClient(name, client) || name || 'unknown';
 }
 
-// The cache/output split an archived observation carries, or null when it has
-// none (a legacy day, or one whose components did not fit its tokens). `complete`
-// mirrors the observation's own tokenComponentsAvailable: a complete split means
-// the remainder is plain input, which lives in the token total rather than in the
-// unclassified bucket (the same rule normalizePeriod applies to a live period).
 function observationComponentSplit(observation) {
   const cacheReadTokens = Math.max(0, Math.round(num(observation?.cacheReadTokens)));
   const cacheWriteTokens = Math.max(0, Math.round(num(observation?.cacheWriteTokens)));
   const outputTokens = Math.max(0, Math.round(num(observation?.outputTokens)));
-  if (cacheReadTokens + cacheWriteTokens + outputTokens === 0) return null;
-  return { cacheReadTokens, cacheWriteTokens, outputTokens, complete: observation?.tokenComponentsAvailable === true };
+  const unclassifiedTokens = Math.max(0, Math.round(num(observation?.unclassifiedTokens
+    ?? (observation?.tokenComponentsAvailable === true
+      ? 0 : num(observation?.tokens) - cacheReadTokens - cacheWriteTokens - outputTokens))));
+  return { cacheReadTokens, cacheWriteTokens, outputTokens, unclassifiedTokens };
 }
 
-// One (client, model) on one date can exist as both a committed observation and a
-// live-day one. They describe the same usage, so the floor takes the larger
-// reading and, when either record carries a cache/output split, scales the most
-// detailed record's split to that reading — a component-less live snapshot must
-// not flatten a committed day's breakdown.
-function lifetimeObservation(observations) {
-  const tokens = Math.max(0, ...observations.map((o) => Math.round(num(o.tokens))));
-  const cost = Math.max(0, ...observations.map((o) => num(o.cost)));
-  let components = null;
-  let bestDetail = 0;
-  for (const observation of observations) {
-    const split = observationComponentSplit(observation);
-    const detail = split ? split.cacheReadTokens + split.cacheWriteTokens + split.outputTokens : 0;
-    if (detail <= bestDetail) continue;
-    bestDetail = detail;
-    const sourceTokens = Math.max(0, Math.round(num(observation.tokens)));
-    const scale = sourceTokens > 0 ? tokens / sourceTokens : 0;
-    components = {
-      cacheReadTokens: Math.round(split.cacheReadTokens * scale),
-      cacheWriteTokens: Math.round(split.cacheWriteTokens * scale),
-      outputTokens: Math.round(split.outputTokens * scale),
-      // Scaling away from an exact record no longer holds exactly.
-      complete: split.complete && scale === 1
-    };
-  }
-  if (components) {
-    // Rounding can push the split past the token total; clamp so the "known"
-    // share never exceeds what was actually added.
-    let budget = tokens;
-    for (const key of ['cacheReadTokens', 'cacheWriteTokens', 'outputTokens']) {
-      components[key] = Math.min(components[key], budget);
-      budget -= components[key];
-    }
-    if (components.cacheReadTokens + components.cacheWriteTokens + components.outputTokens === 0) {
-      components = null;
+function selectedDayComponents(day) {
+  const observations = Object.values(day.observations);
+  const summary = day.componentSummary;
+  const clientCounts = Object.create(null);
+  const modelCounts = Object.create(null);
+  if (summary) {
+    for (const observation of observations) {
+      if (observation.tokens <= 0) continue;
+      clientCounts[observation.client] = num(clientCounts[observation.client]) + 1;
+      modelCounts[observation.modelId] = num(modelCounts[observation.modelId]) + 1;
     }
   }
-  return { tokens, cost, components };
+  return new Map(observations.map((observation) => {
+    let source = observation;
+    if (summary && observation.tokens > 0) {
+      const part = clientCounts[observation.client] === 1
+        ? summary.perClient[observation.client] || {}
+        : modelCounts[observation.modelId] === 1 ? summary.perModel[observation.modelId] || {} : null;
+      // Day summaries have no client-by-model provenance unless one side is unique.
+      if (part) source = {
+        tokens: observation.tokens,
+        ...part,
+        unclassifiedTokens: num(part.unclassifiedTokens),
+        tokenComponentsAvailable: summary.tokenComponentsAvailable
+      };
+    }
+    return [observation, observationComponentSplit(source)];
+  }));
+}
+
+function emptyCumulativeUsage() {
+  return {
+    totalTokens: 0,
+    costUsd: 0,
+    models: Object.create(null),
+    modelCosts: Object.create(null),
+    modelComponents: Object.create(null)
+  };
 }
 
 function allTimeCumulativeFromArchive(archive) {
   const normalized = normalizeDailyHistoryArchive(archive);
-  // The keys are client ids and model names read from the archive on disk, and a
-  // normalized client id can be a string like `__proto__`. A bare-object
-  // accumulator keeps the reduction itself from mutating Object.prototype, and
-  // dropping the reserved names entirely keeps them from leaking downstream,
-  // where addClientUsage writes to ordinary period maps whose `__proto__`
-  // assignment is silently dropped while the token still lands in the total.
   const cumulative = Object.create(null);
-  const dates = new Set([
-    ...Object.keys(normalized.days || {}),
-    ...Object.keys(normalized.liveDays || {})
-  ]);
-  for (const date of dates) {
-    const committedDay = normalized.days?.[date] || null;
-    const liveDay = normalized.liveDays?.[date] || null;
-    // A committed day with no generation marker was captured while a split client
-    // shared its merged id, so its merged-id usage already contains the split
-    // client. Fold it into the merged id the same way the graph path does, and
-    // mark the entry so the floor compares it against the whole family rather
-    // than reading the split client's live usage back as a shortfall.
-    const mergedEra = committedDay !== null && isPreSplitEntry(committedDay);
-    const pairs = new Map();
-    const collect = (day, fold) => {
-      for (const observation of Object.values(day?.observations || {})) {
-        let client = normalizeClientName(observation.client);
-        if (!client || UNSAFE_MAP_KEYS.has(client)) continue;
-        if (fold) client = mergedClientIdFor(client) || client;
-        const model = periodModelKeyFor(client, observation.modelId);
-        if (UNSAFE_MAP_KEYS.has(model)) continue;
-        const key = JSON.stringify([client, model]);
-        const pair = pairs.get(key);
-        if (pair) pair.observations.push(observation);
-        else pairs.set(key, { client, model, observations: [observation] });
-      }
-    };
-    // A live day is always current usage, so it never folds.
-    collect(committedDay, mergedEra);
-    collect(liveDay, false);
-    for (const { client, model, observations } of pairs.values()) {
-      const picked = lifetimeObservation(observations);
-      if (picked.tokens === 0 && picked.cost === 0) continue;
-      const entry = cumulative[client]
-        || (cumulative[client] = {
-          totalTokens: 0,
-          costUsd: 0,
-          models: Object.create(null),
-          modelCosts: Object.create(null),
-          modelComponents: Object.create(null)
+  for (const day of reconciledArchiveDays([], normalized).values()) {
+    for (const [observation, split] of selectedDayComponents(day)) {
+      const mergedEra = isPreSplitEntry(observation.clientIdentityGeneration === undefined ? day : observation);
+      let client = normalizeClientName(observation.client);
+      if (!client || UNSAFE_MAP_KEYS.has(client)) continue;
+      if (mergedEra) client = mergedClientIdFor(client) || client;
+      const model = periodModelKeyFor(client, observation.modelId);
+      if (UNSAFE_MAP_KEYS.has(model)) continue;
+      const entry = cumulative[client] || (cumulative[client] = emptyCumulativeUsage());
+      // Legacy rows contain the whole family; post-split rows belong to one client.
+      const usage = mergedEra && CLIENT_IDENTITY_SPLITS.some(({ merged }) => merged === client)
+        ? (entry.legacy ||= emptyCumulativeUsage()) : entry;
+      const tokens = Math.max(0, Math.round(num(observation.tokens)));
+      const cost = Math.max(0, num(observation.cost));
+      usage.totalTokens += tokens;
+      usage.costUsd += cost;
+      if (tokens > 0) usage.models[model] = num(usage.models[model]) + tokens;
+      if (cost > 0) usage.modelCosts[model] = num(usage.modelCosts[model]) + cost;
+      if (tokens > 0) {
+        const bucket = usage.modelComponents[model] || (usage.modelComponents[model] = {
+          cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, unclassifiedTokens: 0
         });
-      entry.totalTokens += picked.tokens;
-      entry.costUsd += picked.cost;
-      if (picked.tokens > 0) entry.models[model] = num(entry.models[model]) + picked.tokens;
-      if (picked.cost > 0) entry.modelCosts[model] = num(entry.modelCosts[model]) + picked.cost;
-      if (picked.tokens > 0) {
-        const bucket = entry.modelComponents[model]
-          || (entry.modelComponents[model] = {
-            cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, complete: true
-          });
-        bucket.cacheReadTokens += num(picked.components?.cacheReadTokens);
-        bucket.cacheWriteTokens += num(picked.components?.cacheWriteTokens);
-        bucket.outputTokens += num(picked.components?.outputTokens);
-        // Any contribution without an exact split makes the model's total
-        // inexact, so the restored remainder cannot be called plain input.
-        if (picked.components?.complete !== true) bucket.complete = false;
+        for (const key of Object.keys(bucket)) bucket[key] += split[key];
       }
-      if (mergedEra) entry.mergedEra = true;
     }
   }
   return cumulative;
