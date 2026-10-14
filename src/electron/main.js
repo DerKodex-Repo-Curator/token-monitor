@@ -38,6 +38,7 @@ const {
 } = require('./providers/workbuddy/localAuth');
 const { createElectronLimitsFetch } = require('./limits/fetch');
 const {
+  createSessionProxyApplier,
   networkProxySource,
   normalizeNoProxy,
   normalizeProxyUrl,
@@ -83,29 +84,21 @@ function networkProxyEnv() {
   return proxyEnvForSettings(settings || {}, process.env);
 }
 
-// The Chromium half of the app proxy setting, so net.fetch/net.request callers,
-// MiMo's resolveProxy and login windows route the same way as the Node-side
-// transport. Untouched until a proxy is configured, so an install without one
-// keeps Electron's own default; clearing it restores that default.
-let appliedSessionProxyKey = '';
-async function applySessionProxy() {
-  const config = sessionProxyConfig(settings || {});
-  const key = config ? JSON.stringify(config) : '';
-  if (key === appliedSessionProxyKey) return;
-  appliedSessionProxyKey = key;
-  try {
-    await session.defaultSession.setProxy(config || { mode: 'system' });
-    await session.defaultSession.closeAllConnections();
-  } catch (error) {
-    console.log(`[proxy] applying the session proxy failed: ${error.message}`);
-  }
-}
+// The Chromium half of the app proxy setting, so net.fetch/net.request callers
+// and MiMo's resolveProxy route the same way as the Node-side transport.
+// Untouched until a proxy is configured, so an install without one keeps
+// Electron's own default; clearing it restores that default.
+const sessionProxy = createSessionProxyApplier({
+  getSession: () => session.defaultSession,
+  getConfig: () => sessionProxyConfig(settings || {}, process.env),
+  log: (message) => console.log(message)
+});
 
 // Lazy because `session.defaultSession` only exists once the app is ready, and
 // process-wide because the transport caches one proxy agent per proxy URL.
 let mimoExchangeFetch = null;
 function ensureMimoExchangeFetch() {
-  if (!mimoExchangeFetch) mimoExchangeFetch = createMimoExchangeFetch({ session: session.defaultSession });
+  if (!mimoExchangeFetch) mimoExchangeFetch = createMimoExchangeFetch({ session: session.defaultSession, getEnv: networkProxyEnv });
   return mimoExchangeFetch;
 }
 
@@ -7449,7 +7442,7 @@ function rebuildWindow() {
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
   ensureSettingsLoaded();
-  void applySessionProxy();
+  void sessionProxy.apply();
   // Switching the OS between light and dark repaints the taskbar underneath an
   // icon we have already handed to the shell, so the renderer has to recompose
   // it — nothing else in the app would notice the change.
@@ -7871,12 +7864,15 @@ app.whenReady().then(() => {
       settings.startAtLogin = applyLoginItem(settings.startAtLogin);
       saveSettings({ throwOnError: true });
     }
-    if (JSON.stringify([settings.proxyUrl || '', settings.noProxy || '']) !== previousProxyKey) {
-      // Every provider answer so far came over the previous route; ask again
-      // over the new one instead of waiting out each provider's interval.
-      void applySessionProxy().then(() => queueLimitInvalidation({ all: true }, 'settings-change'))
-        .catch((error) => console.log(`[limits-runtime] proxy refresh failed: ${error.message}`));
-    }
+    // Every save re-applies, so re-saving the same proxy retries a session
+    // apply that failed earlier. Every provider answer so far came over the
+    // previous route; ask again over the new one instead of waiting out each
+    // provider's interval.
+    const proxySettingChanged = JSON.stringify([settings.proxyUrl || '', settings.noProxy || '']) !== previousProxyKey;
+    void sessionProxy.apply().then((sessionChanged) => {
+      if (proxySettingChanged || sessionChanged) return queueLimitInvalidation({ all: true }, 'settings-change');
+      return null;
+    }).catch((error) => console.log(`[limits-runtime] proxy refresh failed: ${error.message}`));
     if (settings.automaticAppUpdates && !previousAutomaticAppUpdates) {
       runAppUpdateCheck({ bypassCooldown: true }).catch(() => {});
     }
