@@ -55,6 +55,13 @@ function graph(events, roots) {
 
 for (const kind of ['native', 'mirror']) for (const includeHistory of [false, true]) {
   test(`event capture authority survives ${kind} retained and fresh full scans with History=${includeHistory}`, async t => {
+    // These UTC instants compare authority within one day, not a rollover.
+    const previousTZ = process.env.TZ;
+    process.env.TZ = 'UTC';
+    t.after(() => {
+      if (previousTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTZ;
+    });
     const hubs = [require('../../src/shared/usage'), require('../../worker/src/shared/usage')];
     const { syncPayload } = require('../../src/shared/syncPayload');
     const early = '2026-10-13T06:00:00.000Z';
