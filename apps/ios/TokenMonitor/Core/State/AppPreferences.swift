@@ -83,6 +83,11 @@ final class AppPreferences {
         }
     }
 
+    /// Presentation only; never changes Hub readings or account identities.
+    var workbuddyQuotaTotalEnabled: Bool {
+        didSet { persistLocalPreferences() }
+    }
+
     var masksAccountEmails: Bool {
         didSet { persistLocalPreferences() }
     }
@@ -158,6 +163,7 @@ final class AppPreferences {
         hiddenLimitProviders = Set(
             defaults.stringArray(forKey: Keys.hiddenLimitProviders) ?? []
         )
+        workbuddyQuotaTotalEnabled = defaults.bool(forKey: Keys.workbuddyQuotaTotalEnabled)
         masksAccountEmails = defaults.object(forKey: Keys.masksAccountEmails) as? Bool ?? true
         currency = AppCurrency(
             rawValue: defaults.string(forKey: Keys.currency) ?? ""
@@ -203,6 +209,7 @@ final class AppPreferences {
         defaults.set(limitProviderOrder, forKey: Keys.limitProviderOrder)
         defaults.set(hiddenLimitProviders.sorted(), forKey: Keys.hiddenLimitProviders)
         defaults.set(masksAccountEmails, forKey: Keys.masksAccountEmails)
+        defaults.set(workbuddyQuotaTotalEnabled, forKey: Keys.workbuddyQuotaTotalEnabled)
     }
 
     private func persistSharedPreferences() {
@@ -221,6 +228,7 @@ final class AppPreferences {
         static let limitProviderOrder = "limitProviderOrder"
         static let hiddenLimitProviders = "hiddenLimitProviders"
         static let masksAccountEmails = "masksAccountEmails"
+        static let workbuddyQuotaTotalEnabled = "workbuddyQuotaTotalEnabled"
     }
 }
 

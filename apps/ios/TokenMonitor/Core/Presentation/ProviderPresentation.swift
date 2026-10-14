@@ -39,6 +39,9 @@ nonisolated enum ProviderPresentation {
         case "kilo", "kilocode": "Kilo"
         case "amp": "Amp"
         case "omp": "Oh My Pi"
+        case "goose": "Goose"
+        case "catpaw": "CatPaw"
+        case "notion": "Notion AI"
         case "muse": "Muse Code"
         case "zcode": "ZCode"
         case "reasonix": "Reasonix"
@@ -77,6 +80,7 @@ nonisolated enum ProviderPresentation {
         case "openclaw": rgb(0xff4d4d)
         case "qwen", "alibaba": rgb(0x615ced)
         case "omp": rgb(0xed4abf)
+        case "catpaw": rgb(0x00ffa2)
         case "zed": rgb(0x4173e7)
         case "kilo", "kilocode": rgb(0xf8f676)
         case "commandcode": rgb(0x8c4edd)
@@ -96,7 +100,7 @@ nonisolated enum ProviderPresentation {
         case "thirdparty": rgb(0x8090a6)
         case "opencode", "cursor", "factory", "droid", "kimi", "moonshot", "grok", "xai",
              "copilot", "pi", "mimo", "micode", "xiaomi", "zai", "zaiteam", "zcode",
-             "proma", "devin", "fx", "stepfun", "typesafe": .primary
+             "proma", "devin", "fx", "stepfun", "typesafe", "goose", "notion": .primary
         default: rgb(0x6ab4f0)
         }
     }

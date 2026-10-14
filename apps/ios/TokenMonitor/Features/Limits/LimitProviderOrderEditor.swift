@@ -12,6 +12,7 @@ struct LimitProviderOrderEditor: View {
     @ScaledMetric(relativeTo: .subheadline) private var markSize = 18.0
 
     var body: some View {
+        @Bindable var preferences = preferences
         List {
             Section {
                 ForEach(rowIDs, id: \.self) { id in
@@ -31,6 +32,16 @@ struct LimitProviderOrderEditor: View {
                 }
             } footer: {
                 Text("Changes apply to this iPhone and its widgets. They do not change Hub collection.")
+            }
+
+            if rowIDs.contains("workbuddy") {
+                Section {
+                    Toggle("Show combined quota", isOn: $preferences.workbuddyQuotaTotalEnabled)
+                } header: {
+                    Text("WorkBuddy")
+                } footer: {
+                    Text("Shown only when every account has a fresh, matching finite quota. Individual accounts remain visible.")
+                }
             }
 
             Section {

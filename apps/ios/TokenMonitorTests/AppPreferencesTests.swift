@@ -18,6 +18,7 @@ struct AppPreferencesTests {
 
         #expect(preferences.homeLimitCount == 3)
         #expect(preferences.showsLiveTokenRate)
+        #expect(!preferences.workbuddyQuotaTotalEnabled)
 
         preferences.homeLimitCount = 0
         #expect(preferences.homeLimitCount == 1)
@@ -26,8 +27,10 @@ struct AppPreferencesTests {
         #expect(preferences.homeLimitCount == 8)
 
         preferences.showsLiveTokenRate = false
+        preferences.workbuddyQuotaTotalEnabled = true
         let reloaded = AppPreferences(defaults: defaults, snapshotStore: SharedSnapshotStore(fileURL: nil))
         #expect(!reloaded.showsLiveTokenRate)
+        #expect(reloaded.workbuddyQuotaTotalEnabled)
     }
 
     @Test

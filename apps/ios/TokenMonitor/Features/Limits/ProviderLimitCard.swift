@@ -23,6 +23,7 @@ nonisolated struct LimitProviderGroup: Identifiable {
 }
 
 struct ProviderLimitCard: View {
+    @Environment(AppPreferences.self) private var preferences
     @Environment(\.locale) private var locale
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -84,6 +85,16 @@ struct ProviderLimitCard: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            }
+            if preferences.workbuddyQuotaTotalEnabled,
+               let total = WorkBuddyQuotaTotal.window(for: providers),
+               let first = providers.first {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Combined quota")
+                        .font(.footnote.weight(.medium))
+                    LimitWindowRow(provider: first, window: total)
+                }
+                Divider().padding(.vertical, 4)
             }
             ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
                 if index > 0 {

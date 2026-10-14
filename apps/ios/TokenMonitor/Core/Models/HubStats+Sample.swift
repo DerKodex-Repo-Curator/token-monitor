@@ -402,10 +402,10 @@ extension HubStats {
             )
         }
 
-        func provider(_ id: String, plan: String, windows: [LimitWindow]) -> LimitProvider {
+        func provider(_ id: String, plan: String, account: String? = nil, windows: [LimitWindow]) -> LimitProvider {
             LimitProvider(
-                provider: id, accountKey: "fixture-\(id)", accountLabel: plan,
-                planLabel: nil, accountName: nil, accountEmail: nil,
+                provider: id, accountKey: "fixture-\(id)-\(account ?? "default")", accountLabel: plan,
+                planLabel: nil, accountName: account, accountEmail: nil,
                 workspaceKind: nil, status: "ok", source: "fixture",
                 sourceDetail: nil, updatedAt: now, windows: windows,
                 balanceUsd: nil, balance: nil, sourceDeviceId: "fixture",
@@ -414,6 +414,22 @@ extension HubStats {
         }
 
         let providers = [
+            provider("notion", plan: "Business", windows: [
+                window("session", label: "Rolling", remainingPercent: 75),
+                window("billing", label: "Monthly", remainingPercent: 55)
+            ]),
+            provider("workbuddy", plan: "Personal", account: "Personal", windows: [
+                window("billing", label: "Credits", remainingPercent: 80,
+                       metric: "credits", used: 20, limit: 100, remaining: 80, currency: "CREDITS")
+            ]),
+            provider("workbuddy", plan: "Pro", account: "Work", windows: [
+                window("billing", label: "Credits", remainingPercent: 60,
+                       metric: "credits", used: 80, limit: 200, remaining: 120, currency: "CREDITS")
+            ]),
+            provider("minimax", plan: "Pay-as-you-go", windows: [
+                window("billing", label: "Balance", remainingPercent: nil,
+                       metric: "credits", remaining: 88, currency: "CNY", resets: false)
+            ]),
             provider("antigravity", plan: "Pro", windows: [
                 window("session", label: "Gemini 5-hour", remainingPercent: 100),
                 window("weekly", label: "Gemini weekly", remainingPercent: 83),

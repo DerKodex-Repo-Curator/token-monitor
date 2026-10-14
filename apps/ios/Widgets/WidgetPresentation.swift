@@ -26,6 +26,9 @@ nonisolated enum WidgetPresentation {
         case "qoder": "Qoder"
         case "kimi": "Kimi"
         case "ollama": "Ollama"
+        case "goose": "Goose"
+        case "catpaw": "CatPaw"
+        case "notion": "Notion AI"
         default: providerID?.capitalized ?? "Provider"
         }
     }
@@ -49,6 +52,9 @@ nonisolated enum WidgetPresentation {
         case "copilot": "VendorCopilot"
         case "pi": "VendorPi"
         case "omp": "VendorOMP"
+        case "goose": "VendorGoose"
+        case "catpaw": "VendorCatPaw"
+        case "notion": "VendorNotion"
         case "zed": "VendorZed"
         case "kilo", "kilocode": "VendorKiloCode"
         case "commandcode": "VendorCommandCode"

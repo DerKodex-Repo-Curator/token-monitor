@@ -175,6 +175,7 @@
 		9ACF7A8DE9C6A25D19C7C3A6 /* SystemSurfacesSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F732C52CC7FA2C77E14DEBA /* SystemSurfacesSection.swift */; };
 		6D4406116C74ABF197EA2480 /* SystemSurfaceStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F0307C2F462793909A9EC8E /* SystemSurfaceStatus.swift */; };
 		FA9BD55CAA4232A5C0312D11 /* SystemSurfaceFittedPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C1B422D40168D8CDB5A641 /* SystemSurfaceFittedPreview.swift */; };
+		C015A1000000000000000002 /* WorkBuddyQuotaTotal.swift in Sources */ = {isa = PBXBuildFile; fileRef = C015A1000000000000000001 /* WorkBuddyQuotaTotal.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -366,6 +367,7 @@
 		5F732C52CC7FA2C77E14DEBA /* SystemSurfacesSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TokenMonitor/Features/Settings/SystemSurfacesSection.swift"; sourceTree = SOURCE_ROOT; };
 		6F0307C2F462793909A9EC8E /* SystemSurfaceStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TokenMonitor/Features/Settings/SystemSurfaceStatus.swift"; sourceTree = SOURCE_ROOT; };
 		A6C1B422D40168D8CDB5A641 /* SystemSurfaceFittedPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TokenMonitor/Features/Settings/SystemSurfaceFittedPreview.swift"; sourceTree = SOURCE_ROOT; };
+		C015A1000000000000000001 /* WorkBuddyQuotaTotal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TokenMonitor/Core/Models/WorkBuddyQuotaTotal.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -382,6 +384,7 @@
 				AA9277927F9024B51067B143 /* HubStreamEvent.swift */,
 				3F43B72A681FC31E8DD30576 /* LimitProvider.swift */,
 				113FACDC485BA70FA2CE7BB4 /* LimitWindowSection.swift */,
+				C015A1000000000000000001 /* WorkBuddyQuotaTotal.swift */,
 				7F0369340BF8A3D4F7C8A9DE /* ProviderResetGrant.swift */,
 				90AA54B53CBBE85C4F9876A3 /* ProviderResetCredits.swift */,
 				90A266099249876C9E03A203 /* LimitsSummary.swift */,
@@ -944,6 +947,7 @@
 				621CD8AA9F4F1C12766407BA /* ResetCreditsDetail.swift in Sources */,
 				744692F5F4492B3604BC52A4 /* ResetCreditsRow.swift in Sources */,
 				602BA11DA7FD3F5D82F61945 /* LimitWindowSection.swift in Sources */,
+				C015A1000000000000000002 /* WorkBuddyQuotaTotal.swift in Sources */,
 				A6E2AB8897F3A4C9D5EDBB4D /* ProviderResetGrant.swift in Sources */,
 				AC3DB95EAB64A2B5944962F1 /* ProviderResetCredits.swift in Sources */,
 				4354798727C8AF4FF4560240 /* LimitWindow.swift in Sources */,

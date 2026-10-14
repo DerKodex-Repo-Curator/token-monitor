@@ -45,6 +45,10 @@ struct LimitProviderOrderTests {
         #expect(ordered.map(\.normalizedProviderID) == ["claude", "codex", "opencode", "cursor"])
     }
 
+    @Test func notionPrecedesThirdPartyInDefaultCatalog() {
+        #expect(LimitProviderOrder.ordered([provider("thirdparty"), provider("notion")], order: []).map(\.normalizedProviderID) == ["notion", "thirdparty"])
+    }
+
     @Test func savedOrderWinsThenCatalogFillsIn() {
         let providers = [
             provider("claude"),

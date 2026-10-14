@@ -4,11 +4,11 @@ nonisolated struct LimitWindow: Decodable, Identifiable, Sendable {
     let kind: String?
     let metric: String?
     var label: String?
-    let used: Double?
-    let limit: Double?
-    let remaining: Double?
-    let usedPercent: Double?
-    let remainingPercent: Double?
+    var used: Double?
+    var limit: Double?
+    var remaining: Double?
+    var usedPercent: Double?
+    var remainingPercent: Double?
     let resetsAt: String?
     let resetDescription: String?
     let detail: String?
@@ -17,6 +17,8 @@ nonisolated struct LimitWindow: Decodable, Identifiable, Sendable {
     var limitId: String? = nil
     var additional: Bool? = nil
     var windowMinutes: Double? = nil
+    var source: String? = nil
+    var boundaryKind: String? = nil
 
     func displayLabel(providerID: String?) -> String {
         let explicit = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

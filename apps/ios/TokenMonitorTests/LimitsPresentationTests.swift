@@ -5,7 +5,7 @@ import UIKit
 
 struct LimitsPresentationTests {
     // Desktop mark catalog: verify the actual compiled resources, including widgets' mapping.
-    @Test(arguments: ["claude","codex","opencode","hermes","openclaw","cursor","antigravity","cline","amp","droid","kimi","qwen","grok","copilot","pi","omp","zed","kilo","commandcode","mimo","muse","zcode","kiro","codebuddy","workbuddy","proma","qodercn","reasonix","dsh","cherrystudio","lmstudio","unsloth","devin","fx","mcode","openrouter","gemini","qoder","deepseek","xai","meta","mistral","moonshot","zai","zaiteam","cohere","xiaomi","minimax","doubao","hunyuan","volcengine","ollama","trae","alibaba","stepfun","nvidia","typesafe","thirdparty","factory","newapi","sub2api"])
+    @Test(arguments: ["goose","catpaw","notion","claude","codex","opencode","hermes","openclaw","cursor","antigravity","cline","amp","droid","kimi","qwen","grok","copilot","pi","omp","zed","kilo","commandcode","mimo","muse","zcode","kiro","codebuddy","workbuddy","proma","qodercn","reasonix","dsh","cherrystudio","lmstudio","unsloth","devin","fx","mcode","openrouter","gemini","qoder","deepseek","xai","meta","mistral","moonshot","zai","zaiteam","cohere","xiaomi","minimax","doubao","hunyuan","volcengine","ollama","trae","alibaba","stepfun","nvidia","typesafe","thirdparty","factory","newapi","sub2api"])
     func desktopProviderArtworkLoads(providerID: String) throws {
         let asset = ProviderPresentation.assetName(for: providerID)
         #expect(asset != "VendorTokenMonitor")
@@ -26,6 +26,26 @@ struct LimitsPresentationTests {
 
     private func provider(_ json: String) throws -> LimitProvider {
         try JSONDecoder().decode(LimitProvider.self, from: Data(json.utf8))
+    }
+
+    @Test func newCatalogNamesAndEncryptedWorkBuddyHintMatchDesktop() throws {
+        #expect(ProviderPresentation.displayName(for: "notion") == "Notion AI")
+        #expect(WidgetPresentation.displayName(for: "catpaw") == "CatPaw")
+        let encrypted = try provider(#"{"provider":"workbuddy","status":"unauthorized","actionRequired":"appSessionEncrypted"}"#)
+        #expect(encrypted.statusLabelKey == "Encrypted by app")
+        #expect(encrypted.planCell == .status("Encrypted by app"))
+        let unrelated = try provider(#"{"provider":"codex","status":"unauthorized","actionRequired":"appSessionEncrypted"}"#)
+        #expect(unrelated.statusLabelKey == "Sign in again")
+    }
+
+    @Test func newHubAllowanceAndBalanceWindowsRetainValues() throws {
+        let notion = try provider(#"{"provider":"notion","windows":[{"kind":"session","label":"Rolling","usedPercent":25},{"kind":"billing","label":"Monthly","usedPercent":45}]}"#)
+        #expect(notion.displayWindows.map { notion.remainingPercent(for: $0) } == [75, 55])
+        #expect(LimitWindowSection.make(provider: notion, windows: notion.displayWindows)[0].rows.count == 2)
+        let minimax = try provider(#"{"provider":"minimax","windows":[{"kind":"billing","metric":"credits","label":"Balance","remaining":88,"currency":"CNY"}]}"#)
+        #expect(minimax.displayWindows[0].remaining == 88)
+        #expect(minimax.displayWindows[0].currency == "CNY")
+        #expect(minimax.displayWindows[0].isCredits)
     }
 
     @Test func codexPairsPrimaryAndSeparatesMonthlyAndAdditional() throws {

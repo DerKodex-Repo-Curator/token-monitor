@@ -18,6 +18,8 @@ nonisolated struct LimitProvider: Decodable, Identifiable, Sendable {
     let sourceDeviceId: String?
     let stale: Bool?
     var resetCredits: ProviderResetCredits? = nil
+    var actionRequired: String? = nil
+    var region: String? = nil
 
     var id: String {
         [
@@ -98,7 +100,10 @@ nonisolated struct LimitProvider: Decodable, Identifiable, Sendable {
 
     /// Desktop `limitStatusLabel`; the wire statuses are camelCase.
     var statusLabelKey: String {
-        switch status {
+        if normalizedProviderID == "workbuddy", actionRequired == "appSessionEncrypted" {
+            return "Encrypted by app"
+        }
+        return switch status {
         case "ok": "Live"
         case "disabled": "Disabled"
         case "notConfigured": "Not signed in"

@@ -11,7 +11,7 @@ nonisolated enum LimitProviderOrder {
         "factory", "kimi", "grok", "copilot", "zed", "commandcode", "mimo",
         "zai", "zaiteam", "kiro", "workbuddy", "qoder", "deepseek", "devin",
         "minimax", "typesafe", "openrouter", "volcengine", "ollama", "trae",
-        "alibaba", "stepfun", "thirdparty"
+        "alibaba", "stepfun", "notion", "thirdparty"
     ]
 
     static func normalizedID(_ raw: String?) -> String {
