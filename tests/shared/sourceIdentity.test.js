@@ -25,6 +25,40 @@ const nativePeriod = events => normalizePeriod(extractUsageFromTokscale({ entrie
   messages: c.messages, performance: c.performance, unpricedTokens: c.pricing?.unpricedTokens }))) }));
 const state = events => periodIdentityStateFromSource(source(events), nativePeriod(events), options);
 
+test('warm unrelated events preserve past authority and mixed event fragments stay unproved until full capture', () => {
+  const past = event('past', 30, 'native', Date.parse('2026-10-12T06:00:00Z'));
+  const mixed = event('mixed');
+  mixed.contributions.unshift(event('older', 20, 'native', Date.parse('2026-10-12T06:00:00Z')).contributions[0]);
+  const base = state([past, mixed]);
+  const capture = (events, at) => periodIdentityStateFromSource({ ...source(events), capturedAt: at }, nativePeriod(events), options);
+  const next = replaceIdentityToday(base, capture([event('fresh'), event('mixed', 7)], '2026-10-13T09:00:00.000Z'), day);
+  const proof = identityPeriodFromState(next);
+  assert.equal(proof.events.find(e => e.id === id('past')).capturedAt, clock);
+  assert.equal(proof.events.find(e => e.id === id('fresh')).capturedAt, '2026-10-13T09:00:00.000Z');
+  assert.equal(proof.events.find(e => e.id === id('mixed')), undefined);
+  const again = replaceIdentityToday(next, capture([event('mixed', 9)], '2026-10-13T10:00:00.000Z'), day);
+  assert.equal(identityPeriodFromState(again).events.find(e => e.id === id('mixed')), undefined);
+  assert.equal(identityPeriodFromState(capture([mixed], '2026-10-13T10:00:00.000Z')).events[0].capturedAt, '2026-10-13T10:00:00.000Z');
+});
+
+test('ledger event proof time survives serialization and absent-session inventory updates without upgrading legacy unknown time', () => {
+  const full = { sourceUsage: { ...source([event('A')]), fullHistory: true } };
+  const accepted = captureSourceLedger(undefined, [full], { retainedBoundaryChecked: true }).ledger;
+  const old = JSON.parse(JSON.stringify(accepted));
+  delete old.scopes[id('scope')].events[id('A')].capturedAt;
+  const late = '2026-10-13T09:00:00.000Z';
+  const nextGraph = { sourceUsage: { ...source([event('B')]), capturedAt: late, fullHistory: true,
+    sessions: [{ ...source([event('B')]).sessions[0], sessionId: 'fresh-session' }] } };
+  const next = captureSourceLedger(old, [nextGraph], { retainedBoundaryChecked: true }).ledger;
+  const restored = JSON.parse(JSON.stringify(next));
+  const proof = historyIdentityFromLedger(restored, options);
+  assert.equal(proof.events.find(e => e.id === id('A')).capturedAt, clock);
+  assert.equal(proof.events.find(e => e.id === id('B')).capturedAt, late);
+  delete restored.scopes[id('scope')].events[id('A')].capturedAt;
+  assert.equal(historyIdentityFromLedger(restored, options).events.find(e => e.id === id('A')), undefined);
+  assert.equal(Object.keys(captureSourceLedger(restored, [], {}).ledger.scopes[id('scope')].events).length, 2, 'unknown proof time never discards retained accounting');
+});
+
 test('exact event claims use existing parser aliases, components, raw throughput and unpriced counters', () => {
   const events = [event('A'), event('B', 4, 'mirror')];
   const proof = usageIdentityFromState({ today: state(events) }, { today: nativePeriod(events) });

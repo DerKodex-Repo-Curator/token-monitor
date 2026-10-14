@@ -92,6 +92,7 @@ function periodIdentityFromSource(source, period) {
   const identity = nativeIdentityEvents(source);
   if (!identity) return null;
   const events = identity.events.map(event => ({ id: event.id, sessionId: event.sessionId, observationKind: event.observationKind,
+    capturedAt: identity.capturedAt,
     usage: contributionPeriod(event.contributions, event.sessionId, period?.sessions?.[`claude:${event.sessionId}`]) }));
   return { capturedAt: identity.capturedAt, events };
 }
@@ -112,6 +113,7 @@ function periodIdentityStateFromSource(source, period, options = {}) {
       days.get(date).push(value);
     }
     return { id: event.id, sessionId: event.sessionId, observationKind: event.observationKind,
+      capturedAt: identity.capturedAt,
       days: [...days].map(([date, values]) => ({ date, usage: contributionPeriod(values, event.sessionId, period?.sessions?.[`claude:${event.sessionId}`]) })) };
   }).filter(event => event.days.length) };
 }
@@ -126,25 +128,32 @@ function stripClaimMetadata(period) {
 
 function identityPeriodFromState(state) {
   if (!state) return null;
-  return { capturedAt: state.capturedAt, events: state.events.map(({ days, ...event }) => ({ ...event,
+  return { capturedAt: state.capturedAt, events: state.events.map(({ days, ...event }) => ({ ...event, capturedAt: event.capturedAt || state.capturedAt,
     usage: stripClaimMetadata(mergePeriods(...days.map(day => day.usage))) })).filter(event => event.usage.totalTokens > 0 || event.usage.costUsd > 0) };
 }
 
 function replaceIdentityToday(base, fresh, todayKey) {
   if (!base || !fresh) return null;
   const events = new Map();
+  const unproved = new Set(base.unprovedEventIds || []);
   for (const event of base.events) {
     const days = event.days.filter(day => day.date !== todayKey);
-    if (days.length) events.set(event.id, { ...event, days });
+    if (days.length) events.set(event.id, { ...event, capturedAt: event.capturedAt || base.capturedAt, days });
   }
   for (const event of fresh.events) {
     const previous = events.get(event.id);
     // A changed owner is safe only for the replaced day, never older fragments.
     if (previous && (previous.sessionId !== event.sessionId || previous.observationKind !== event.observationKind)) return null;
     const days = [...(previous?.days || []), ...event.days.filter(day => day.date === todayKey)];
-    if (days.length) events.set(event.id, { ...event, days });
+    const capturedAt = event.capturedAt || fresh.capturedAt;
+    // Different captures of one event's past/Today fragments cannot be ranked
+    // as one observation. Keep it unproved until a full capture reunites them.
+    if (previous && previous.capturedAt !== capturedAt) unproved.add(event.id);
+    if (unproved.has(event.id)) { events.delete(event.id); continue; }
+    if (days.length) events.set(event.id, { ...event, capturedAt, days });
   }
-  return { capturedAt: fresh.capturedAt, events: [...events.values()] };
+  return { capturedAt: fresh.capturedAt, events: [...events.values()],
+    ...(unproved.size ? { unprovedEventIds: [...unproved] } : {}) };
 }
 
 function nonnegativeCountersFit(claim, counter, terms = 1) {
@@ -202,7 +211,8 @@ function identityStateFromLedger(ledger, periods, options = {}) {
       || scope.proof.identityStatus !== 'exact' || !Number.isFinite(Date.parse(scope.acceptedAt))) continue;
     for (const [id, event] of Object.entries(scope.events || {})) {
       const row = scope.sessions?.[event.ownerKey];
-      if (row?.client !== 'claude' || !validEvent({ ...event, id }, row.sessionId)) continue;
+      if (row?.client !== 'claude' || !validEvent({ ...event, id }, row.sessionId)
+        || !Number.isFinite(Date.parse(event.capturedAt))) continue;
       for (const name of PERIODS) {
         const values = event.contributions.filter(value => {
           const day = identityDayKey(value.timestamp, options.timeZone);
@@ -210,7 +220,7 @@ function identityStateFromLedger(ledger, periods, options = {}) {
             : !options.allTimeSince || day >= options.allTimeSince);
         });
         if (!values.length) continue;
-        const state = periodIdentityStateFromSource({ version: 2, eventIdentityVersion: 2, capturedAt: scope.acceptedAt,
+        const state = periodIdentityStateFromSource({ version: 2, eventIdentityVersion: 2, capturedAt: event.capturedAt,
           scopes: [{ id: 'accepted', clients: ['claude'], readStatus: 'complete', identityStatus: 'exact' }],
           sessions: [{ client: 'claude', sessionId: row.sessionId, scopeId: 'accepted', events: [{ ...event, id, contributions: values }] }] }, periods[name], options);
         result[name].events.push(...state.events);
@@ -230,8 +240,10 @@ function supplementNativeIdentityState(native, retained, periods, rawPresence) {
     const live = new Set(rawPresence?.[name] || Object.keys(periods[name]?.sessions || {}));
     const prior = retained[name];
     const fresh = native[name];
-    const events = [...(fresh?.events || []).filter(event => live.has(`claude:${event.sessionId}`)),
-      ...(prior?.events || []).filter(event => !live.has(`claude:${event.sessionId}`))];
+    const events = [...(fresh?.events || []).filter(event => live.has(`claude:${event.sessionId}`))
+      .map(event => ({ ...event, capturedAt: event.capturedAt || fresh.capturedAt })),
+    ...(prior?.events || []).filter(event => !live.has(`claude:${event.sessionId}`))
+      .map(event => ({ ...event, capturedAt: event.capturedAt || prior.capturedAt }))];
     const counts = new Map();
     for (const event of events) counts.set(event.id, (counts.get(event.id) || 0) + 1);
     // An event represented by multiple selected owners is not a unique claim.
@@ -250,7 +262,8 @@ function historyIdentityFromLedger(ledger, options = {}) {
       || scope.proof.identityStatus !== 'exact' || !Number.isFinite(Date.parse(scope.acceptedAt))) continue;
     for (const [id, event] of Object.entries(scope.events || {})) {
       const row = scope.sessions?.[event.ownerKey];
-      if (row?.client !== 'claude' || !validEvent({ ...event, id }, row.sessionId)) continue;
+      if (row?.client !== 'claude' || !validEvent({ ...event, id }, row.sessionId)
+        || !Number.isFinite(Date.parse(event.capturedAt))) continue;
       const dates = new Map();
       for (const value of event.contributions) {
         const date = identityDayKey(value.timestamp, options.timeZone);
@@ -263,7 +276,8 @@ function historyIdentityFromLedger(ledger, options = {}) {
       }
       const days = [...dates].map(([date, clients]) => ({ date,
         usage: parseGraphResult({ contributions: [{ date, clients }] }).contributions[0] }));
-      if (days.length) result.events.push({ id, sessionId: row.sessionId, observationKind: event.observationKind, days });
+      if (days.length) result.events.push({ id, sessionId: row.sessionId, observationKind: event.observationKind,
+        capturedAt: new Date(event.capturedAt).toISOString(), days });
       if (scope.acceptedAt > result.capturedAt) result.capturedAt = scope.acceptedAt;
     }
   }

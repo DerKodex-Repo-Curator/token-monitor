@@ -265,6 +265,25 @@ test('Worker compact storage retains root-only timing through limits carry and r
   }
 });
 
+test('Worker compact persistence and limits carry preserve each event observation time', async () => {
+  const client = await fixture();
+  const value = payload('mixed', 2, { history: true });
+  const early = new Date(Date.parse(NOW) - 3600000).toISOString();
+  const proof = normalizeDeviceRecord(value).usageIdentity;
+  for (const capture of [...Object.values(proof.periods), proof.history]) {
+    capture.events.forEach((event, i) => { event.capturedAt = i ? NOW : early; });
+  }
+  value.usageIdentity = packUsageIdentity(proof);
+  assert.equal((await client.send('/api/ingest', 'POST', value)).status, 200);
+  assert.equal((await client.send('/api/ingest', 'POST', { deviceId: 'mixed', limitsOnly: true })).status, 200);
+  await client.restart();
+  const stored = client.state.map.get('dev:mixed');
+  const restored = normalizeUsageIdentity(stored.usageIdentity, stored);
+  for (const capture of [...Object.values(restored.periods), restored.history]) {
+    assert.deepEqual(capture.events.map(event => event.capturedAt), [early, NOW]);
+  }
+});
+
 test('Worker propagates unrelated storage errors and does not retry a record without proof', async () => {
   for (const [failure, proof] of [[new Error('disk I/O error: SQLITE_IOERR'), true],
     [new Error('storage quota exceeded: SQLITE_FULL'), true], [new Error('value too large'), true],

@@ -24,6 +24,33 @@ test('fixed wire has exact successful Node/generated Worker parity', () => {
   assert.deepEqual(workerIdentity.normalizeUsageIdentity(wire, record), normalizeUsageIdentity(wire, record));
 });
 
+test('event capture times survive fixed rows, bound their envelope and prevent unequal-time row sharing', () => {
+  const { record, raw } = fixture();
+  const early = '2026-10-13T01:00:00.000Z';
+  raw.periods.today.events[0].capturedAt = capturedAt;
+  raw.periods.allTime = structuredClone(raw.periods.today);
+  raw.periods.allTime.events[0].capturedAt = early;
+  record.allTime = record.today;
+  const wire = packUsageIdentity(raw);
+  assert.ok(wire);
+  assert.equal(wire.events.length, 2, 'equal counters with different event authority cannot share a row');
+  for (const identity of [{ normalizeUsageIdentity }, workerIdentity]) {
+    const decoded = identity.normalizeUsageIdentity(wire, record);
+    assert.equal(decoded.periods.today.events[0].capturedAt, capturedAt);
+    assert.equal(decoded.periods.allTime.events[0].capturedAt, early);
+    assert.deepEqual(identity.normalizeUsageIdentity(decoded, record), decoded);
+  }
+  assert.deepEqual(packUsageIdentity(normalizeUsageIdentity(wire, record)), wire);
+  for (const invalid of [null, 123, '', 'bad-date', '2026-10-13T03:00:00.000Z']) {
+    const badRaw = structuredClone(raw);
+    badRaw.periods.today.events[0].capturedAt = invalid;
+    assert.equal(packUsageIdentity(badRaw), null);
+    const badWire = structuredClone(wire);
+    badWire.events[badWire.periods.today.events[0]][5] = invalid;
+    for (const identity of [{ normalizeUsageIdentity }, workerIdentity]) assert.equal(identity.normalizeUsageIdentity(badWire, { today: record.today }), null);
+  }
+});
+
 test('fixed schema rejects malformed types, widths, duplicate IDs and nested caller maps', () => {
   const { record, wire } = fixture();
   for (const corrupt of [

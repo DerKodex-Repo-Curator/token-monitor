@@ -95,6 +95,71 @@ test('root-only timing cannot leave an accepted exact model map undeducted', () 
   }
 });
 
+test('period and History proof cannot leave impossible cache/output residuals in available buckets', () => {
+  const model = 'claude-sonnet-4-5';
+  const period = (cacheRead, output) => normalizePeriod({ totalTokens: 100, cacheReadTokens: cacheRead, outputTokens: output,
+    clients: { claude: 100 }, models: { [model]: 100 }, clientModels: { claude: { [model]: 100 } },
+    clientCacheReads: { claude: cacheRead }, modelCacheReads: { [model]: cacheRead },
+    clientOutputs: { claude: output }, modelOutputs: { [model]: output }, capabilities: { tokenComponents: true } });
+  const day = (cacheRead, output) => ({ date: '2026-10-13', tokens: 100, cost: 0, messages: 1,
+    cacheReadTokens: cacheRead, cacheWriteTokens: 0, outputTokens: output, unclassifiedTokens: 0,
+    perClient: { claude: { tokens: 100, cost: 0, messages: 1, cacheReadTokens: cacheRead, cacheWriteTokens: 0, outputTokens: output, unclassifiedTokens: 0 } },
+    perModel: { [model]: { tokens: 100, cost: 0, cacheReadTokens: cacheRead, cacheWriteTokens: 0, outputTokens: output, unclassifiedTokens: 0 } } });
+  const mirror = device('mirror', [{ id: id(1), usage: period(100, 0) }], 'mirror');
+  const native = device('native', [{ id: id(1), usage: period(0, 100) }]);
+  mirror.history = normalizeHistory({ contributions: [day(100, 0)] }, { todayKey: '2026-10-13' });
+  native.history = normalizeHistory({ contributions: [day(0, 100)] }, { todayKey: '2026-10-13' });
+  for (const record of [mirror, native]) record.usageIdentity.history = { capturedAt: NOW, events: [{ id: id(1),
+    observationKind: record === mirror ? 'mirror' : 'native', days: [{ date: '2026-10-13', usage: day(record === mirror ? 100 : 0, record === mirror ? 0 : 100) }] }] };
+  const corrupt = structuredClone(mirror.usageIdentity);
+  for (const evidence of Object.values(corrupt.periods)) evidence.events[0].usage = period(0, 0);
+  corrupt.history.events[0].days[0].usage = day(0, 0);
+  const packed = packUsageIdentity(corrupt);
+  assert.ok(packed, 'standalone claims are internally consistent before receiver bounds');
+  for (const evidence of [corrupt, packed]) for (const hub of [require('../../src/shared/usage'), workerUsage]) {
+    assert.equal(hub.normalizeDeviceRecord({ ...mirror, usageIdentity: evidence }).usageIdentity, undefined);
+    const result = hub.aggregateDevices([{ ...mirror, usageIdentity: evidence }, native], 600000, Date.parse(NOW));
+    for (const value of Object.values(result.periods)) {
+      assert.equal(value.totalTokens, 200);
+      assert.equal(value.cacheReadTokens + value.outputTokens, 200);
+    }
+    const history = hub.aggregateHistory([{ ...mirror, usageIdentity: evidence }, native], { todayKey: '2026-10-13' });
+    assert.equal(history.summary.totalTokens, 200);
+    for (const value of [history.daily[0], history.daily[0].perClient.claude, history.daily[0].perModel[model]]) {
+      assert.equal(value.cacheReadTokens + value.outputTokens, value.tokens);
+    }
+  }
+});
+
+test('root, client and model residuals independently bound raw and fixed period and History proof', () => {
+  const { packFixedIdentity } = require('../../src/shared/usageIdentityCodec');
+  const counter = (tokens, cacheReadTokens = 0) => ({ tokens, cost: 0, messages: 0, cacheReadTokens,
+    cacheWriteTokens: 0, outputTokens: 0, unclassifiedTokens: 0 });
+  const claim = normalizePeriod({ totalTokens: 100, clients: { claude: 100 }, models: { a: 100 }, clientModels: { claude: { a: 100 } } });
+  const dayClaim = { ...counter(100), perClient: { claude: counter(100) }, perModel: { a: counter(100) } };
+  for (const axis of ['root', 'client', 'model']) {
+    const accepted = normalizePeriod({ totalTokens: axis === 'root' ? 100 : 200, cacheReadTokens: 100,
+      clients: axis === 'client' ? { claude: 100, codex: 100 } : { claude: axis === 'root' ? 100 : 200 },
+      models: axis === 'root' ? { a: 100 } : { a: 100, b: 100 },
+      clientCacheReads: axis === 'client' ? { claude: 100 } : {}, modelCacheReads: axis === 'model' ? { a: 100 } : {} });
+    const day = { date: '2026-10-13', ...counter(axis === 'root' ? 100 : 200, 100),
+      perClient: axis === 'client' ? { claude: counter(100, 100), codex: counter(100) }
+        : { claude: counter(axis === 'root' ? 100 : 200) },
+      perModel: axis === 'model' ? { a: counter(100, 100), b: counter(100) }
+        : axis === 'root' ? { a: counter(100) } : { a: counter(100), b: counter(100) } };
+    const record = { today: accepted, history: { daily: [day], monthly: [{ month: '2026-10',
+      tokens: day.tokens, cost: 0, perClient: day.perClient, perModel: day.perModel }] } };
+    for (const raw of [
+      { version: 1, eventIdentityVersion: 2, periods: { today: { capturedAt: NOW, events: [{ id: id(1), observationKind: 'mirror', usage: claim }] } } },
+      { version: 1, eventIdentityVersion: 2, periods: {}, history: { capturedAt: NOW, events: [{ id: id(1), observationKind: 'mirror',
+        days: [{ date: day.date, usage: dayClaim }] }] } }
+    ]) for (const evidence of [raw, packFixedIdentity(raw)]) {
+      assert.ok(evidence);
+      for (const identity of [{ normalizeUsageIdentity }, workerIdentity]) assert.equal(identity.normalizeUsageIdentity(evidence, record), null, axis);
+    }
+  }
+});
+
 test('a duplicated event cannot claim a disjoint event reasoning even within the accepted session bound', () => {
   const shared = { id: id(1), usage: usage(100) };
   const separate = { id: id(2), usage: usage(200) };

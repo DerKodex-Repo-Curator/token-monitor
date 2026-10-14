@@ -246,7 +246,14 @@ function normalizeSourceLedger(value) {
       if (!identifier(uid) || !next.sessions[event?.ownerKey] || !rows || rows.some(row => !row)) {
         throw new Error('Invalid source ledger claim; retained accounting cannot be discarded');
       }
-      next.events[uid] = { ownerKey: event.ownerKey, contributions: rows, ...observationKind(event.observationKind) };
+      // Proof observation time follows the event, not a later scope inventory
+      // check. Legacy present inventory can certify its original capture only.
+      const owner = next.sessions[event.ownerKey];
+      const capturedAt = timestamp(event.capturedAt) ? event.capturedAt
+        : owner.sourceState === 'present' && owner.sourceObservedAt === scope.acceptedAt ? scope.acceptedAt : null;
+      next.events[uid] = { ownerKey: event.ownerKey, contributions: rows, ...observationKind(event.observationKind),
+        ...(timestamp(capturedAt) && Date.parse(capturedAt) <= Date.parse(scope.acceptedAt)
+          ? { capturedAt: new Date(capturedAt).toISOString() } : {}) };
     }
     ledger.scopes[id] = next;
   }
@@ -284,7 +291,8 @@ function scansFromGraphs(graphs) {
         for (const event of row.events) {
           const rows = Array.isArray(event?.contributions) ? event.contributions.map(contribution) : null;
           if (!identifier(event?.id) || !rows || rows.some(row => !row) || events[event.id]) { reason = 'identity-gap'; continue; }
-          events[event.id] = { ownerKey: key, contributions: rows, ...observationKind(event.observationKind) };
+          events[event.id] = { ownerKey: key, contributions: rows, ...observationKind(event.observationKind),
+            capturedAt: new Date(source.capturedAt).toISOString() };
         }
       }
       if (clients.some(client => Number(source.rowsWithoutIdentity?.[client] || 0) !== 0)) reason = 'identity-gap';

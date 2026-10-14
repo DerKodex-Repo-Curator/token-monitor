@@ -52,13 +52,14 @@ function packFixedIdentity(identity) {
   const cores = new Map();
   const add = (event, allTime = false) => {
     const body = event.usage ? period(event.usage, allTime) : history(event.days);
-    const core = event.usage && JSON.stringify([event.id, event.observationKind, body[0], body[2], body[3]]);
+    const core = event.usage && JSON.stringify([event.id, event.observationKind, event.capturedAt, body[0], body[2], body[3]]);
     // Only complete non-session accounting equality permits AllTime to reuse a
     // Today/Month row; its reference always strips session identity and detail.
     if (allTime && cores.has(core)) return cores.get(core);
     if (allTime) body[1] = [];
     const row = [event.id, event.observationKind === 'native' ? 1 : 0,
-      !allTime && event.sessionId ? index('sessions', event.sessionId) : -1, event.usage ? 0 : 1, body];
+      !allTime && event.sessionId ? index('sessions', event.sessionId) : -1, event.usage ? 0 : 1, body,
+      ...(event.capturedAt !== undefined ? [event.capturedAt] : [])];
     const signature = JSON.stringify(row);
     if (!rows.has(signature)) { rows.set(signature, result.events.length); result.events.push(row); }
     const ref = rows.get(signature);
@@ -198,10 +199,13 @@ function unpackFixedIdentity(raw) {
       return { date: day[0], usage };
     });
     const events = array(raw.events, MAX_EVENTS).map(row => {
-      array(row, 5, 5);
+      array(row, 6);
+      if (row.length !== 5 && row.length !== 6) fail();
+      if (row.length === 6 && (typeof row[5] !== 'string' || row[5].length > 32 || !Number.isFinite(Date.parse(row[5])))) fail();
       if (typeof row[0] !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(row[0]) || ![0, 1].includes(row[1]) || ![0, 1].includes(row[3])) fail();
       const sessionId = row[2] === -1 ? '' : identifier('sessions', row[2]);
       return { id: row[0], observationKind: row[1] ? 'native' : 'mirror', ...(sessionId ? { sessionId } : {}),
+        ...(row.length === 6 ? { capturedAt: new Date(row[5]).toISOString() } : {}),
         ...(row[3] ? { days: history(row[4]) } : { usage: period(row[4], sessionId) }) };
     });
     let count = 0;
@@ -213,6 +217,7 @@ function unpackFixedIdentity(raw) {
         if (++count > MAX_EVENTS || !Number.isSafeInteger(ref) || ref < 0 || ref >= events.length) fail();
         const event = events[ref];
         if (seen.has(event.id) || Boolean(event.days) !== isHistory) fail();
+        if (event.capturedAt && Date.parse(event.capturedAt) > Date.parse(value.capturedAt)) fail();
         seen.add(event.id);
         if (!allTime) return event;
         const { sessionId: _sessionId, ...header } = event;

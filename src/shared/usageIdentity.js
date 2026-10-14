@@ -27,7 +27,7 @@ function packUsageIdentity(identity) {
       if (count > MAX_EVENTS) throw new Error('too many claims');
       const ids = new Set();
       return { capturedAt: new Date(value.capturedAt).toISOString(), events: value.events.map(event => {
-        const header = eventHeader(event);
+        const header = eventHeader(event, value.capturedAt);
         if (!header || ids.has(header.id)) throw new Error('invalid event');
         ids.add(header.id);
         if (history) {
@@ -274,10 +274,46 @@ function normalizedPeriodClaim(raw, accepted) {
   return claim;
 }
 
-function eventHeader(event) {
+function eventHeader(event, capturedAt) {
   if (!ID.test(event?.id) || !['native', 'mirror'].includes(event.observationKind)) return null;
+  if (own(event, 'capturedAt') && (typeof event.capturedAt !== 'string' || event.capturedAt.length > 32
+    || !Number.isFinite(Date.parse(event.capturedAt)) || Date.parse(event.capturedAt) > Date.parse(capturedAt))) return null;
   return { id: event.id, observationKind: event.observationKind,
+    ...(own(event, 'capturedAt') ? { capturedAt: new Date(event.capturedAt).toISOString() } : {}),
     ...(typeof event.sessionId === 'string' && event.sessionId.length <= 256 ? { sessionId: event.sessionId } : {}) };
+}
+
+function residualComponentsFit(tokens, components, claimedTokens, claimedComponents) {
+  const remaining = (tokens || 0) - (claimedTokens || 0);
+  let known = 0;
+  for (const [field, value] of Object.entries(components)) {
+    const residual = value - (claimedComponents[field] || 0);
+    if (residual < 0) return false;
+    known += residual;
+  }
+  return remaining >= 0 && known <= remaining;
+}
+
+function periodResidualFits(claim, accepted) {
+  const fields = ['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens'];
+  if (!residualComponentsFit(accepted.totalTokens, Object.fromEntries(fields.map(field => [field, accepted[field] || 0])),
+    claim.totalTokens, claim)) return false;
+  for (const [tokens, maps] of [['clients', ['clientCacheReads', 'clientCacheWrites', 'clientOutputs', 'clientUnclassifiedTokens']],
+    ['models', ['modelCacheReads', 'modelCacheWrites', 'modelOutputs', 'modelUnclassifiedTokens']]]) {
+    for (const key of Object.keys(claim[tokens] || {})) {
+      if (!residualComponentsFit(accepted[tokens]?.[key], Object.fromEntries(maps.map(field => [field, accepted[field]?.[key] || 0])),
+        claim[tokens][key], Object.fromEntries(maps.map(field => [field, claim[field]?.[key] || 0])))) return false;
+    }
+  }
+  return true;
+}
+
+function historyResidualFits(claim, accepted) {
+  const fields = ['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens'];
+  const fits = (row, bound) => residualComponentsFit(bound?.tokens,
+    Object.fromEntries(fields.filter(field => own(bound, field)).map(field => [field, bound[field]])), row?.tokens, row || {});
+  return fits(claim, accepted) && ['perClient', 'perModel'].every(group =>
+    Object.entries(claim[group] || {}).every(([key, row]) => fits(row, accepted?.[group]?.[key])));
 }
 
 function normalizePeriodEvidence(raw, accepted) {
@@ -286,7 +322,7 @@ function normalizePeriodEvidence(raw, accepted) {
   const events = [];
   const sum = Object.create(null);
   for (const event of raw.events) {
-    const header = eventHeader(event);
+    const header = eventHeader(event, raw.capturedAt);
     const usage = normalizedPeriodClaim(event?.usage, accepted);
     if (!header || !usage || ids.has(header.id)) return null;
     const sessionKey = `claude:${header.sessionId || ''}`;
@@ -304,7 +340,7 @@ function normalizePeriodEvidence(raw, accepted) {
   // normalize/pack round trips, but never require or create an unavailable map.
   const bounded = { ...sum };
   if (!accepted?.modelThroughput) delete bounded.modelThroughput;
-  if (!within(bounded, bound)) return null;
+  if (!within(bounded, bound) || !periodResidualFits(sum, bound)) return null;
   return { capturedAt: new Date(raw.capturedAt).toISOString(), events };
 }
 
@@ -325,7 +361,7 @@ function normalizedHistoryClaim(value, accepted) {
   }
   if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
     .reduce((sum, field) => sum + (usage[field] || 0), 0) > (usage.tokens || 0)) return null;
-  for (const row of Object.values(usage.perModel)) {
+  for (const row of [...Object.values(usage.perClient), ...Object.values(usage.perModel)]) {
     if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
       .reduce((sum, field) => sum + (row[field] || 0), 0) > (row.tokens || 0)) return null;
   }
@@ -341,7 +377,7 @@ function normalizeHistoryEvidence(raw, accepted) {
   const days = new Map();
   const months = new Map();
   for (const event of raw.events) {
-    const header = eventHeader(event);
+    const header = eventHeader(event, raw.capturedAt);
     if (!header || ids.has(header.id) || !Array.isArray(event.days) || event.days.length > 64) return null;
     ids.add(header.id);
     const rows = [];
@@ -354,14 +390,15 @@ function normalizeHistoryEvidence(raw, accepted) {
       if (daily.has(day.date)) availableHistoryComponents(usage, daily.get(day.date));
       if (daily.has(day.date)) addTree(days.get(day.date) || (days.set(day.date, Object.create(null)), days.get(day.date)), usage);
       const month = day.date.slice(0, 7);
-      addTree(months.get(month) || (months.set(month, Object.create(null)), months.get(month)), monthlyCounters(usage));
+      addTree(months.get(month) || (months.set(month, Object.create(null)), months.get(month)), usage);
       rows.push({ date: day.date, usage });
     }
     events.push({ ...header, days: rows });
   }
-  for (const [date, sum] of days) if (!within(sum, historyCounters(daily.get(date)))) return null;
+  for (const [date, sum] of days) if (!within(sum, historyCounters(daily.get(date)))
+    || !historyResidualFits(sum, daily.get(date))) return null;
   for (const [month, sum] of months) {
-    if (!within(sum, monthlyCounters(monthly.get(month)))) return null;
+    if (!within(monthlyCounters(sum), monthlyCounters(monthly.get(month))) || !historyResidualFits(sum, monthly.get(month))) return null;
   }
   return { capturedAt: new Date(raw.capturedAt).toISOString(), events };
 }
@@ -399,7 +436,7 @@ function losers(records, evidenceFor, eligible = () => true) {
     if (!eligible(record)) return;
     const evidence = evidenceFor(record);
     for (const event of evidence?.events || []) {
-      const claim = { index, event, capturedAt: evidence.capturedAt, deviceId: record.deviceId || String(index) };
+      const claim = { index, event, capturedAt: event.capturedAt || evidence.capturedAt, deviceId: record.deviceId || String(index) };
       const group = byId.get(event.id) || [];
       group.push(claim); byId.set(event.id, group);
     }

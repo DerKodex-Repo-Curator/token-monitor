@@ -53,6 +53,52 @@ function graph(events, roots) {
   return { contributions: [...dates].map(([date, clients]) => ({ date, clients })), sourceUsage: { ...data.sourceUsage, fullHistory: true } };
 }
 
+for (const kind of ['native', 'mirror']) for (const includeHistory of [false, true]) {
+  test(`event capture authority survives ${kind} retained and fresh full scans with History=${includeHistory}`, async t => {
+    const hubs = [require('../../src/shared/usage'), require('../../worker/src/shared/usage')];
+    const { syncPayload } = require('../../src/shared/syncPayload');
+    const early = '2026-10-13T06:00:00.000Z';
+    const middle = '2026-10-13T08:00:00.000Z';
+    const late = '2026-10-13T09:00:00.000Z';
+    const read = (events, at) => {
+      const result = report(events);
+      result.sourceUsage.capturedAt = at;
+      const sessions = new Map();
+      events.forEach((e, i) => {
+        const sessionId = e.id === id('B') ? 'fresh-session' : 's';
+        result.entries[i].sessionId = sessionId;
+        if (!sessions.has(sessionId)) sessions.set(sessionId, { client: 'claude', sessionId, scopeId: id('scope'), events: [] });
+        sessions.get(sessionId).events.push(e);
+      });
+      result.sourceUsage.sessions = [...sessions.values()];
+      return result;
+    };
+    const fullGraph = (events, at) => ({ ...graph(events, {}), sourceUsage: { ...read(events, at).sourceUsage, fullHistory: true } });
+    const options = base(t, { historyEnabled: true, includeHistory: true, dailyHistoryArchiveEnabled: true,
+      getSessionUsageArchive: () => ({ version: 1, sessions: {} }) });
+    options.dailyHistoryArchiveOptions = { path: path.join(options.homeDir, 'daily.json') };
+    let projection;
+    await collectUsageOnce({ ...options, onSourceArchiveComputed: value => { projection = value; },
+      runTokscale: async () => read([event('A', 100, kind)], early), runGraph: async () => fullGraph([event('A', 100, kind)], early) });
+    const selected = await collectUsageOnce({ ...options, now: new Date(late), includeHistory, sourceArchiveSnapshot: projection,
+      runTokscale: async () => read([event('B', 20, kind)], late), runGraph: async () => fullGraph([event('B', 20, kind)], late) });
+    const peerEvents = [event('A', 50, kind), event('B', 10, kind)];
+    const peer = await collectUsageOnce({ ...base(t), now: new Date(middle), deviceId: 'remote', historyEnabled: true, includeHistory: true,
+      runTokscale: async () => read(peerEvents, middle), runGraph: async () => fullGraph(peerEvents, middle) });
+    assert.equal(selected.today.totalTokens, 120);
+    for (const hub of hubs) for (const pair of [[selected, peer], [syncPayload(selected), syncPayload(peer)]]) {
+      const result = hub.aggregateDevices(pair, 14400000, Date.parse(late));
+      for (const name of ['today', 'month', 'allTime']) assert.equal(result.periods[name].totalTokens, 70);
+      if (includeHistory) assert.equal(hub.aggregateHistory(pair, { todayKey }).summary.totalTokens, 70);
+    }
+    for (const evidence of Object.values(selected.usageIdentity.periods)) {
+      assert.equal(evidence.events.find(e => e.id === id('A')).capturedAt, early);
+      assert.equal(evidence.events.find(e => e.id === id('B')).capturedAt, late);
+    }
+    if (includeHistory) assert.equal(selected.usageIdentity.history.events.find(e => e.id === id('A')).capturedAt, early);
+  });
+}
+
 test('collector publishes independent native/mirror events for headless agents without leaking source metadata', async t => {
   const options = base(t);
   const events = [event('A', 4), event('B', 6, 'mirror')];
