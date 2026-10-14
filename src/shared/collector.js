@@ -40,7 +40,8 @@ const { retainDailyHistory, retainLiveDailyHistory, captureLiveDailyHistory, sou
 const { applySourceDailyUsage } = require('./usage/sourceDailyUsage');
 const sourceLedger = require('./usage/sourceLedger');
 const { legacyCostsEqual } = sourceLedger;
-const { periodIdentityStateFromSource, replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, historyIdentityFromLedger, acceptedClaudeWindows } = require('./usage/sourceIdentity');
+const { acceptedClaudeWindows, reconcileClaudePeriodState } = require('./usage/claudePeriodState');
+const { periodIdentityStateFromSource, replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, historyIdentityFromLedger } = require('./usage/sourceIdentity');
 const { readSessionUsageArchiveEvidence } = require('./usage/sessionUsageArchiveStore');
 const {
   createSubprocessTermination,
@@ -1758,53 +1759,21 @@ async function collectUsageOnce(options) {
     }
   }
   if (projectsEnabled) applyProjectRollups(summary);
-  let acceptedIdentityState = nativeIdentityState;
-  let noArchiveClaudeSnapshot = previousClaude;
-  const noArchiveReadFailed = retainedClaude && (Object.values(nativeSources).some(source => !nativeClaudeComplete(source))
-    || options.includeHistory && (!nativeHistoryGraph?.sourceUsage?.fullHistory || !nativeClaudeComplete(nativeHistoryGraph.sourceUsage)));
-  if (!options.dailyHistoryArchiveEnabled && retainedClaude && noArchiveReadFailed) {
-    for (const name of ['today', 'month', 'allTime']) {
-      const partitions = name === 'today' ? todayPartitions : nativePartitions[name];
-      // Full captures have exact client partitions. Warm captures retain the
-      // existing exact delta for other clients and replace only Claude's delta.
-      if (partitions) {
-        partitions.claude = retainedClaude.periods[name];
-        windowsPeriods[name] = mergePeriods(...Object.values(partitions));
-        summary[name] = mergePeriods(windowsPeriods[name], wslBundle[name], codexLocalView?.[name] || emptyPeriod());
-      } else {
-        const freshClaude = applyPeriodDelta(previousClaude.periods[name], todayPartitions?.claude || emptyPeriod(), previousClaude.periods.today);
-        summary[name] = applyPeriodDelta(summary[name], retainedClaude.periods[name], freshClaude);
-        windowsPeriods[name] = applyPeriodDelta(windowsPeriods[name], retainedClaude.periods[name], freshClaude);
-      }
-    }
-    acceptedIdentityState = retainedClaude.identityState;
-    if (options.includeHistory && nativeHistoryGraph && previousClaude.historyGraph) {
-      const otherGraph = { contributions: (nativeHistoryGraph?.contributions || []).map(day => ({ date: day.date,
-        clients: (day.clients || []).filter(row => normalizeClientName(row.client) !== 'claude') })) };
-      const historyOptions = { capDays: options.historyCapDays, todayKey };
-      summary.history = mergeHistories([normalizeHistory(parseGraphResult(otherGraph), historyOptions),
-        normalizeHistory(parseGraphResult(previousClaude.historyGraph), historyOptions)], historyOptions);
-    }
+  const claudeState = reconcileClaudePeriodState(summary, {
+    periods: windowsPeriods, partitions: nativePartitions, todayPartitions, sources: nativeSources,
+    identityState: nativeIdentityState, historyGraph: nativeHistoryGraph
+  }, {
+    previous: previousClaude, retained: retainedClaude,
+    enabled: !options.dailyHistoryArchiveEnabled && trackedClientSet.has('claude'),
+    complete: nativeClaudeComplete, includeHistory: options.includeHistory,
+    todayKey, timeZone, identityFingerprint, projectsEnabled, historyCapDays: options.historyCapDays,
+    supplementalPeriods: name => mergePeriods(wslBundle[name], codexLocalView?.[name] || emptyPeriod())
+  });
+  let acceptedIdentityState = claudeState.identityState;
+  const noArchiveClaudeSnapshot = claudeState.snapshot;
+  const noArchiveReadFailed = claudeState.readFailed;
+  if (noArchiveReadFailed) {
     try { options.onDiagnosticEvent?.({ subsystem: 'collector', code: 'claude-read-retained' }); } catch (_) { /* observer only */ }
-  } else if (!options.dailyHistoryArchiveEnabled && trackedClientSet.has('claude')
-    && Object.values(nativeSources).every(nativeClaudeComplete)
-    && Object.keys(nativeSources).every(name => nativeIdentityState[name])
-    && (!previousClaude || !options.includeHistory || nativeHistoryGraph?.sourceUsage?.fullHistory && nativeClaudeComplete(nativeHistoryGraph.sourceUsage))) {
-    const periods = {};
-    for (const name of ['today', 'month', 'allTime']) periods[name] = nativePartitions[name]?.claude
-      || (previousClaude && name !== 'today' ? applyPeriodDelta(previousClaude.periods[name], todayPartitions?.claude || emptyPeriod(), previousClaude.periods.today)
-        : todayPartitions?.claude || emptyPeriod());
-    for (const period of Object.values(periods)) for (const [key, session] of Object.entries(period.sessions || {})) {
-      const metadata = summary.allTime.sessions?.[key];
-      for (const field of ['projectId', 'projectLabel', 'title']) if (metadata?.[field]) session[field] = metadata[field];
-    }
-    if (projectsEnabled) applyProjectRollups(periods);
-    noArchiveClaudeSnapshot = { identityFingerprint, dateKey: todayKey, timeZone, periods: structuredClone(periods),
-      identityState: structuredClone(nativeIdentityState),
-      historyGraph: nativeHistoryGraph?.sourceUsage?.fullHistory && nativeClaudeComplete(nativeHistoryGraph.sourceUsage)
-        ? { contributions: (nativeHistoryGraph.contributions || []).map(day => ({ date: day.date,
-        clients: (day.clients || []).filter(row => normalizeClientName(row.client) === 'claude') })) } : previousClaude?.historyGraph,
-      historyIdentity: previousClaude?.historyIdentity };
   }
   if (projectsEnabled) applyProjectRollups(summary);
   const ledger = sourceLedger.getSourceLedger?.(acceptedSourceProjection);

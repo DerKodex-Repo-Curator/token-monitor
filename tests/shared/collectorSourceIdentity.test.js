@@ -383,6 +383,7 @@ async function waitFor(condition, timeoutMs = 4500) {
 }
 
 test('no-archive runtime retains accepted Claude periods and History on partial full scans, then accepts exact downward corrections', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: now.getTime() });
   const options = base(t, { historyEnabled: true, retainDeletedSessions: false, dailyHistoryArchiveEnabled: false });
   const shared = process.env.TOKEN_MONITOR_SHARED_DIR;
   process.env.TOKEN_MONITOR_SHARED_DIR = options.homeDir;

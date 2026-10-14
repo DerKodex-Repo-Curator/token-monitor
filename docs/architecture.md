@@ -75,6 +75,8 @@ Codex question waiting shares the context/turn/cache rollout index. Match outsta
 
 Watch title changes and confirmed removals must survive later read misses and restarts without changing token/cost baselines or the full-scan timestamp. Persist metadata-only anchor updates when catalog title or project provenance changes. Watch metadata refresh covers sessions present in today, including retained client partitions; month/allTime-only sessions refresh on the next full scan.
 
+Claude period snapshots keep the last accepted native counters and event claims together when archive retention is disabled. Their coverage is limited to the scanned windows; they do not grant the full-history replacement authority of the retained source ledger. A partial read preserves the accepted Claude snapshot while other client partitions remain fresh. The collector supplies native read/root evidence to `usage/claudePeriodState.js`, which owns acceptance, rollover and projection without archive I/O.
+
 ### Watching
 
 - There is no cooldown on top of the debounce, because the product promises 3–5 s updates. The debounce is instead capped by `watchMaxWaitMs` (5 s, floored at the debounce), because a trailing debounce never fires while agents keep writing faster than it. Time behind an in-flight tick does not count toward the cap, so a slow tick cannot chain scans back-to-back.

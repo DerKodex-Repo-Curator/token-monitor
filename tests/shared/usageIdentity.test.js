@@ -115,6 +115,7 @@ test('event model attribution and physical component totals bound session and th
       corrupt(evidence.events[0].usage);
     }
     assert.equal(normalizeUsageIdentity(raw, accepted), null);
+    assert.equal(packUsageIdentity(raw), null, 'packing must not repair malformed raw attribution');
     assert.equal(normalizeUsageIdentity(packUsageIdentity(raw), accepted), null);
   }
 });
@@ -162,6 +163,7 @@ test('event client/model buckets must match their model buckets before any dupli
       evidence.events = [structuredClone(evidence.events[0])];
       corrupt(evidence.events[0].usage);
     }
+    assert.equal(packUsageIdentity(raw), null, 'packing must reject mismatched model/client token, cost and unpriced maps');
     for (const evidence of [raw, packUsageIdentity(raw)]) {
       const badMirror = { ...mirror, usageIdentity: evidence };
       for (const implementation of [{ normalizeUsageIdentity, aggregateDevices },
@@ -232,7 +234,7 @@ test('sync never sends event paths/titles or all-time session detail; budget dro
   assert.equal(reduced.payload.allTime.totalTokens, 100);
 });
 
-test('counter tables preserve thousands of cumulative events within the existing upload budget', () => {
+test('fixed event rows preserve thousands of cumulative events within the existing upload budget', () => {
   const events = Array.from({ length: 2500 }, (_, index) => ({ id: id(index + 1), usage: usage(100) }));
   const record = device('a', events);
   const result = serializeSyncPayload(record);
@@ -242,15 +244,20 @@ test('counter tables preserve thousands of cumulative events within the existing
   assert.equal(aggregateDevices([result.payload, other], 600000, Date.parse(NOW)).periods.allTime.totalTokens, 250000);
 });
 
-test('counter table invalid references, duplicates, prototype paths, negative and overflowing counters fail closed', () => {
+test('fixed rows reject invalid references, duplicates, identifiers, negative and overflowing counters', () => {
   const record = device('a', [{ id: id(1), usage: usage(100) }]);
   const packed = packUsageIdentity(normalizeDeviceRecord(record).usageIdentity);
   const corruptions = [
     value => { value.periods.today.events[0] = 999999; },
-    value => { value.events[0][3].push(value.events[0][3][0], 1); },
-    value => { value.paths[0] = ['__proto__', 'totalTokens']; },
-    value => { value.events[0][3][1] = -1; },
-    value => { value.events[0][3][1] = Number.MAX_SAFE_INTEGER + 1; },
+    value => { value.events[0][4][0].push(structuredClone(value.events[0][4][0][0])); },
+    value => { value.models[0] = '__proto__'; },
+    value => { value.events[0][4][0][0][1] = -1; },
+    value => { value.events[0][4][0][0][1] = Number.MAX_SAFE_INTEGER + 1; },
+    value => { value.events[0][4][0][0][2] = Infinity; },
+    value => { value.events[0][4][0][0][0] = 999999; },
+    value => { value.periods.today.events.push(value.periods.today.events[0]); },
+    value => { value.events[0].push({ totalTokens: 1 }); },
+    value => { value.paths = [['models', 'foreign']]; },
     value => { value.encoding = 'unknown'; }
   ];
   for (const corrupt of corruptions) {
@@ -279,4 +286,119 @@ test('explicit timed output separates timed from untimed fragments in one report
   assert.equal(period.sessions['claude:session'].timedOutputTokens, 10);
   delete row.performance.timedOutputTokens;
   assert.equal(extractUsageFromTokscale({ entries: [row] }).timedOutputTokens, 40);
+});
+
+test('fixed upload conserves mixed models, timing, explicit provider/session allocations and unpriced counters', () => {
+  const { extractUsageFromTokscale } = require('../../src/shared/usage');
+  const contribution = normalizePeriod(extractUsageFromTokscale({ entries: [
+    { client: 'claude', sessionId: 'session-a', model: 'a', provider: 'one', input: 13, output: 3,
+      reasoning: 2, cacheRead: 5, cacheWrite: 2, cost: 0.012, messages: 2, unpricedTokens: 3,
+      performance: { timedTokens: 16, timedOutputTokens: 3, totalDurationMs: 111 } },
+    { client: 'claude', sessionId: 'session-a', model: 'a', provider: 'two', input: 7, output: 2,
+      cost: 0.003, messages: 1 },
+    { client: 'claude', sessionId: 'session-a', model: 'b', provider: 'one', input: 5, output: 1,
+      cost: 0, unpricedTokens: 6, messages: 1 }
+  ] }));
+  const record = device('a', [{ id: id(1), usage: contribution }]);
+  const canonical = normalizeUsageIdentity(record.usageIdentity, record);
+  const packed = packUsageIdentity(canonical);
+  assert.equal(packed.encoding, 'event-rows-v1');
+  assert.equal(packed.paths, undefined);
+  const decoded = normalizeUsageIdentity(packed, record);
+  assert.deepEqual(decoded.periods.today, canonical.periods.today);
+  assert.deepEqual(decoded.periods.month, canonical.periods.month);
+  assert.equal(Object.keys(decoded.periods.allTime.events[0].usage.sessions).length, 0);
+  const session = decoded.periods.today.events[0].usage.sessions['claude:session-a'];
+  assert.deepEqual(session.providers, canonical.periods.today.events[0].usage.sessions['claude:session-a'].providers);
+  assert.equal(decoded.periods.today.events[0].usage.timedOutputTokens, 3);
+  assert.equal(decoded.periods.today.events[0].usage.unpricedTokens, 9);
+});
+
+test('serial period captures and independent graph History share only equal accounting rows', () => {
+  const record = device('a', [{ id: id(1), usage: usage(100) }]);
+  for (const [index, name] of ['today', 'month', 'allTime'].entries()) {
+    record[name] = usage((index + 1) * 100);
+    record.usageIdentity.periods[name].capturedAt = `2026-10-13T02:0${index}:00.000Z`;
+    record.usageIdentity.periods[name].events[0].usage = record[name];
+  }
+  const day = historyDay(400);
+  record.history = normalizeHistory({ contributions: [day] }, { todayKey: '2026-10-13' });
+  record.usageIdentity.history = { capturedAt: '2026-10-13T02:05:00.000Z', events: [
+    { id: id(1), observationKind: 'native', days: [{ date: day.date, usage: day }] }
+  ] };
+  const packed = packUsageIdentity(normalizeUsageIdentity(record.usageIdentity, record));
+  assert.equal(packed.events.length, 4);
+  const decoded = normalizeUsageIdentity(packed, record);
+  assert.deepEqual(['today', 'month', 'allTime'].map(name => decoded.periods[name].events[0].usage.totalTokens), [100, 200, 300]);
+  assert.equal(decoded.history.events[0].days[0].usage.tokens, 400);
+  assert.equal(decoded.history.capturedAt, '2026-10-13T02:05:00.000Z');
+
+  // Session-free AllTime accounting with equal tokens but different cost or
+  // timing must never borrow the earlier row.
+  const same = device('a', [{ id: id(1), usage: usage(100) }]);
+  const equalPacked = packUsageIdentity(normalizeUsageIdentity(same.usageIdentity, same));
+  assert.equal(equalPacked.events.length, 1);
+  for (const changed of [usage(100, { cost: 0.1 }), usage(100, { timed: false })]) {
+    same.allTime = changed;
+    same.usageIdentity.periods.allTime.events[0].usage = changed;
+    assert.equal(packUsageIdentity(normalizeUsageIdentity(same.usageIdentity, same)).events.length, 2);
+  }
+});
+
+test('fixed History preserves optional omitted components and monthly-only days', () => {
+  const record = device('a', [{ id: id(1), usage: usage(100) }]);
+  const day = historyDay(100);
+  record.history = normalizeHistory({ contributions: [day] }, { todayKey: '2026-10-13' });
+  record.usageIdentity.history = { capturedAt: NOW, events: [
+    { id: id(1), observationKind: 'native', days: [{ date: day.date, usage: day }] }
+  ] };
+  // This is the current trimming contract: availability can differ between
+  // root, client and model component counters.
+  delete record.history.daily[0].cacheReadTokens;
+  delete record.history.daily[0].perClient.claude.outputTokens;
+  delete record.history.daily[0].perModel['claude-sonnet-4-5'].unclassifiedTokens;
+  const canonical = normalizeUsageIdentity(record.usageIdentity, record);
+  assert.ok(canonical.history);
+  const packed = packUsageIdentity(canonical);
+  assert.ok(packed);
+  assert.deepEqual(normalizeUsageIdentity(packed, record).history, canonical.history);
+  record.history.daily = [];
+  const monthlyCanonical = normalizeUsageIdentity(record.usageIdentity, record);
+  assert.deepEqual(normalizeUsageIdentity(packUsageIdentity(monthlyCanonical), record).history, monthlyCanonical.history);
+});
+
+test('fixed session attribution corruption and overclaims stay additive in Node and generated Worker', () => {
+  const record = device('host', [{ id: id(1), usage: usage(100, { model: 'a' }) },
+    { id: id(2), usage: usage(100, { model: 'b' }) }], 'mirror');
+  const original = device('remote', [{ id: id(1), usage: usage(100, { model: 'a' }) }]);
+  const canonical = normalizeUsageIdentity(record.usageIdentity, record);
+  canonical.periods = { today: { ...canonical.periods.today, events: [canonical.periods.today.events[0]] } };
+  const packed = packUsageIdentity(canonical);
+  for (const corrupt of [
+    value => { value.events[0][4][1][0][1][0][0] = value.models.push('foreign') - 1; },
+    value => { value.events[0][4][0][0][2] = 1; },
+    value => { value.events[0][4][0][0][3] = 101; },
+    value => { value.events[0][4][0][0][0] = value.models.push('foreign') - 1; },
+    value => { value.events[0][4][0][0].push({ clientModels: { claude: { b: 100 } } }); }
+  ]) {
+    const wire = structuredClone(packed); corrupt(wire);
+    for (const implementation of [{ normalizeUsageIdentity, aggregateDevices },
+      { normalizeUsageIdentity: workerIdentity.normalizeUsageIdentity, aggregateDevices: workerUsage.aggregateDevices }]) {
+      assert.equal(implementation.normalizeUsageIdentity(wire, record), null);
+      assert.equal(implementation.aggregateDevices([{ ...record, usageIdentity: wire }, original], 600000, Date.parse(NOW)).periods.today.totalTokens, 300);
+    }
+  }
+});
+
+test('AllTime-only proof adds no session/provider detail and unsupported draft encoding stays additive', () => {
+  const record = device('a', [{ id: id(1), usage: usage(100) }]);
+  const canonical = normalizeUsageIdentity(record.usageIdentity, record);
+  canonical.periods = { allTime: canonical.periods.allTime };
+  const packed = packUsageIdentity(canonical);
+  assert.deepEqual(packed.sessions, []);
+  assert.deepEqual(packed.providers, []);
+  assert.deepEqual(packed.events[0][4][1], []);
+  assert.ok(normalizeUsageIdentity(packed, record));
+  packed.encoding = 'counter-table-v1';
+  assert.equal(normalizeUsageIdentity(packed, record), null);
 });

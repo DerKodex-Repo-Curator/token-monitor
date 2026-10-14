@@ -7,124 +7,50 @@ const { canonicalProjectKey } = require('./projectKey');
 
 // Evidence is additive to the existing device contract. A missing, malformed or
 // oversized claim never authorizes a deduction from accepted usage.
-const PERIODS = ['today', 'month', 'allTime'];
-const MAX_EVENTS = 20000;
+const { packFixedIdentity, unpackFixedIdentity, PERIODS, MAX_EVENTS, MODEL_FIELDS, ROOT_FIELDS,
+  CLIENT_FIELDS, TIMING, SESSION_FIELDS: SESSION_COUNTERS, HISTORY_FIELDS: HISTORY_COUNTERS } = require('./usageIdentityCodec');
 const ID = /^sha256:[a-f0-9]{64}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const COST_FIELDS = new Set(['cost', 'costUsd', 'clientCosts', 'modelCosts', 'clientModelCosts']);
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
-const PERIOD_COUNTERS = ['totalTokens', 'costUsd', 'unpricedTokens', 'cacheReadTokens', 'cacheWriteTokens',
-  'outputTokens', 'unclassifiedTokens', 'timedTokens', 'timedOutputTokens', 'timedDurationMs'];
-const PERIOD_MAPS = ['clients', 'clientCosts', 'clientCacheReads', 'clientCacheWrites', 'clientOutputs',
-  'clientUnclassifiedTokens', 'clientUnpricedTokens', 'models', 'modelCosts', 'modelCacheReads',
-  'modelCacheWrites', 'modelOutputs', 'modelUnclassifiedTokens', 'modelUnpricedTokens'];
+const PERIOD_COUNTERS = [...ROOT_FIELDS, ...TIMING];
+const PERIOD_MAPS = [...CLIENT_FIELDS, ...MODEL_FIELDS];
 const NESTED_MAPS = ['clientModels', 'clientModelCosts', 'clientModelUnpricedTokens'];
-const SESSION_COUNTERS = ['totalTokens', 'costUsd', 'unpricedTokens', 'messageCount', 'inputTokens',
-  'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'timedOutputTokens', 'timedDurationMs'];
-const HISTORY_COUNTERS = ['tokens', 'cost', 'unpricedTokens', 'messages', 'cacheReadTokens',
-  'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens'];
-const MAX_PATHS = 8192;
-const MAX_EVENT_COUNTERS = 512;
 
-// Dictionary tables keep this optional JSON field inside the existing upload
-// budget without compressing or replacing the ordinary usage contract. Decode
-// first, then apply exactly the same whitelist and accounting bounds as JSON
-// object claims. Paths are data, never executable property expressions.
+// Validate redundant internal maps before projecting them onto fixed rows. In
+// particular, projection must not repair corrupt client/model attribution.
 function packUsageIdentity(identity) {
-  const paths = [];
-  const pathIndices = new Map();
-  const events = [];
-  const eventIndices = new Map();
-  const coreIndices = new Map();
-  const flatten = (value, prefix = [], result = []) => {
-    for (const [key, entry] of Object.entries(value || {})) {
-      const path = [...prefix, key];
-      if (typeof entry !== 'number') {
-        if (entry && typeof entry === 'object') flatten(entry, path, result);
-        continue;
-      }
-      if (!entry) continue;
-      const signature = JSON.stringify(path);
-      if (!pathIndices.has(signature)) { pathIndices.set(signature, paths.length); paths.push(path); }
-      result.push(pathIndices.get(signature), entry);
-    }
-    return result;
-  };
-  const add = (event, omitSessionDetail = false) => {
-    const core = event.usage ? JSON.stringify([event.id, event.observationKind,
-      { ...event.usage, sessions: undefined }]) : '';
-    // A shared Today/Month event already exposes its admitted session detail.
-    // Reuse its counters for AllTime, whose reference explicitly removes that
-    // detail. Events found only in AllTime never add a session id to the table.
-    if (omitSessionDetail && coreIndices.has(core)) return coreIndices.get(core);
-    const row = [event.id, event.observationKind === 'native' ? 1 : 0, event.sessionId || '',
-      event.usage ? flatten(event.usage) : event.days.map(day => [day.date, flatten(day.usage)])];
-    const signature = JSON.stringify(row);
-    if (!eventIndices.has(signature)) { eventIndices.set(signature, events.length); events.push(row); }
-    const index = eventIndices.get(signature);
-    if (core) coreIndices.set(core, index);
-    return index;
-  };
-  const result = { version: 1, eventIdentityVersion: 2, encoding: 'counter-table-v1', paths, events, periods: {} };
-  for (const [name, evidence] of Object.entries(identity.periods || {})) {
-    result.periods[name] = { capturedAt: evidence.capturedAt, events: evidence.events.map(event => add(event, name === 'allTime')),
-      ...(name === 'allTime' ? { omitSessionDetail: true } : {}) };
-  }
-  if (identity.history) result.history = { capturedAt: identity.history.capturedAt, events: identity.history.events.map(event => add(event)) };
-  return paths.length <= MAX_PATHS && events.every(row => Array.isArray(row[3][0])
-    ? row[3].every(day => day[1].length <= MAX_EVENT_COUNTERS * 2) : row[3].length <= MAX_EVENT_COUNTERS * 2) ? result : null;
-}
-
-function unpackUsageIdentity(raw) {
-  if (raw.encoding !== 'counter-table-v1' || !Array.isArray(raw.paths) || raw.paths.length > MAX_PATHS
-    || !Array.isArray(raw.events) || raw.events.length > MAX_EVENTS) return null;
-  const paths = raw.paths;
-  if (paths.some(path => !Array.isArray(path) || !path.length || path.length > 5
-    || path.some(key => typeof key !== 'string' || !key || key.length > 512 || ['__proto__', 'constructor', 'prototype'].includes(key)))) return null;
-  const inflate = pairs => {
-    if (!Array.isArray(pairs) || pairs.length % 2 || pairs.length > MAX_EVENT_COUNTERS * 2) throw new Error('invalid table row');
-    const result = Object.create(null);
-    for (let index = 0; index < pairs.length; index += 2) {
-      const path = paths[pairs[index]];
-      if (!Number.isSafeInteger(pairs[index]) || !path || typeof pairs[index + 1] !== 'number' || !Number.isFinite(pairs[index + 1])) throw new Error('invalid table counter');
-      let target = result;
-      for (const key of path.slice(0, -1)) {
-        if (own(target, key) && (!target[key] || typeof target[key] !== 'object')) throw new Error('overlapping paths');
-        target = target[key] ||= Object.create(null);
-      }
-      const key = path[path.length - 1];
-      if (own(target, key)) throw new Error('duplicate table counter');
-      target[key] = pairs[index + 1];
-    }
-    return result;
-  };
-  let count = 0;
-  const evidence = (value, history = false, omitSessionDetail = false) => {
-    if (!value || !Array.isArray(value.events) || value.events.length > MAX_EVENTS) return null;
-    count += value.events.length;
-    if (count > MAX_EVENTS) throw new Error('too many claims');
-    return { capturedAt: value.capturedAt, events: value.events.map(index => {
-      const row = raw.events[index];
-      if (!Number.isSafeInteger(index) || !Array.isArray(row) || row.length !== 4 || ![0, 1].includes(row[1])) throw new Error('invalid event reference');
-      const event = { id: row[0], observationKind: row[1] ? 'native' : 'mirror', sessionId: row[2] };
-      if (!history) {
-        event.usage = inflate(row[3]);
-        if (omitSessionDetail) { delete event.sessionId; delete event.usage.sessions; }
-      }
-      else {
-        if (!Array.isArray(row[3]) || row[3].length > 64) throw new Error('invalid history claim');
-        event.days = row[3].map(day => {
-          if (!Array.isArray(day) || day.length !== 2) throw new Error('invalid history day');
-          return { date: day[0], usage: inflate(day[1]) };
-        });
-      }
-      return event;
-    }) };
-  };
   try {
-    return { version: 1, eventIdentityVersion: 2,
-      periods: Object.fromEntries(PERIODS.filter(name => own(raw.periods, name)).map(name => [name,
-        evidence(raw.periods[name], false, name === 'allTime' && raw.periods[name]?.omitSessionDetail === true)])),
-      ...(raw.history ? { history: evidence(raw.history, true) } : {}) };
+    if (identity?.version !== 1 || identity.eventIdentityVersion !== 2 || identity.encoding) return null;
+    const result = { version: 1, eventIdentityVersion: 2, periods: {} };
+    let count = 0;
+    const evidence = (value, history = false) => {
+      if (!value || !Number.isFinite(Date.parse(value.capturedAt)) || !Array.isArray(value.events)) throw new Error('invalid capture');
+      count += value.events.length;
+      if (count > MAX_EVENTS) throw new Error('too many claims');
+      const ids = new Set();
+      return { capturedAt: new Date(value.capturedAt).toISOString(), events: value.events.map(event => {
+        const header = eventHeader(event);
+        if (!header || ids.has(header.id)) throw new Error('invalid event');
+        ids.add(header.id);
+        if (history) {
+          if (!Array.isArray(event.days) || event.days.length > 64) throw new Error('invalid event days');
+          const dates = new Set();
+          return { ...header, days: event.days.map(day => {
+            const usage = normalizedHistoryClaim(day.usage, day.usage);
+            if (!DAY.test(day.date) || dates.has(day.date) || !usage) throw new Error('invalid day');
+            dates.add(day.date);
+            return { date: day.date, usage };
+          }) };
+        }
+        const usage = normalizedPeriodClaim(event.usage, event.usage);
+        if (!usage || Object.keys(usage.sessions).some(key => key !== `claude:${header.sessionId || ''}`)) throw new Error('invalid period claim');
+        return { ...header, usage };
+      }) };
+    };
+    for (const name of PERIODS) if (own(identity.periods, name)) result.periods[name] = evidence(identity.periods[name]);
+    if (identity.history) result.history = evidence(identity.history, true);
+    return packFixedIdentity(result);
   } catch { return null; }
 }
 
@@ -206,17 +132,17 @@ function availableHistoryComponents(usage, accepted) {
   }
 }
 
-function addTree(target, source) {
+function addTree(target, source, cost = false) {
   for (const [key, value] of Object.entries(source)) {
-    if (typeof value === 'number') target[key] = (target[key] || 0) + value;
-    else addTree(target[key] ||= Object.create(null), value);
+    if (typeof value === 'number') target[key] = numeric((target[key] || 0) + value, cost || COST_FIELDS.has(key) ? 'cost' : key);
+    else addTree(target[key] ||= Object.create(null), value, cost || COST_FIELDS.has(key));
   }
   return target;
 }
 
 function within(claim, accepted, cost = false) {
   return Object.entries(claim).every(([key, value]) => {
-    const money = cost || /cost/i.test(key);
+    const money = cost || COST_FIELDS.has(key);
     const bound = accepted?.[key] || 0;
     return typeof value === 'number'
       ? value <= bound + (money ? 8 * Number.EPSILON * MAX_EVENTS * Math.max(value, bound) : 0)
@@ -261,7 +187,9 @@ function pruneEmptyAttribution(period) {
   }
 }
 
-function total(mapValue) { return Object.values(mapValue || {}).reduce((sum, n) => sum + n, 0); }
+function total(mapValue, cost = false) {
+  return numeric(Object.values(mapValue || {}).reduce((sum, n) => sum + n, 0), cost ? 'cost' : 'tokens');
+}
 function equal(a, b) {
   if (Number.isSafeInteger(a || 0) && Number.isSafeInteger(b || 0)) return (a || 0) === (b || 0);
   return a === b || Math.abs((a || 0) - (b || 0)) <= 8 * Number.EPSILON * MAX_EVENTS * Math.max(a || 0, b || 0);
@@ -277,9 +205,9 @@ function normalizedPeriodClaim(raw, accepted) {
   if (!equal(claim.totalTokens, claim.clients.claude) || !equal(claim.costUsd, claim.clientCosts.claude)
     || Object.keys(claim.clients).some(key => key !== 'claude')
     || Object.keys(claim.clientCosts).some(key => key !== 'claude')
-    || !equal(claim.totalTokens, total(claim.models)) || !equal(claim.costUsd, total(claim.modelCosts))
+    || !equal(claim.totalTokens, total(claim.models)) || !equal(claim.costUsd, total(claim.modelCosts, true))
     || !equal(claim.totalTokens, total(claim.clientModels.claude))
-    || !equal(claim.costUsd, total(claim.clientModelCosts.claude))) return null;
+    || !equal(claim.costUsd, total(claim.clientModelCosts.claude, true))) return null;
   if (!sameCounters(claim.models, claim.clientModels.claude)
     || !sameCounters(claim.modelCosts, claim.clientModelCosts.claude)
     || !sameCounters(claim.modelUnpricedTokens, claim.clientModelUnpricedTokens.claude)) return null;
@@ -311,11 +239,11 @@ function normalizedPeriodClaim(raw, accepted) {
       .reduce((sum, field) => sum + (claim[field][model] || 0), 0) > tokens) return null;
   }
   for (const field of ['timedTokens', 'timedOutputTokens', 'timedDurationMs']) {
-    if (!equal(claim[field], Object.values(claim.modelThroughput || {}).reduce((sum, row) => sum + (row[field] || 0), 0))) return null;
+    if (!equal(claim[field], numeric(Object.values(claim.modelThroughput || {}).reduce((sum, row) => sum + (row[field] || 0), 0), field))) return null;
   }
   for (const [key, session] of Object.entries(claim.sessions)) {
     if (!key.startsWith('claude:') || !equal(session.totalTokens, total(session.models))
-      || !equal(session.costUsd, total(session.modelCosts))
+      || !equal(session.costUsd, total(session.modelCosts, true))
       || !within(session.models, claim.models) || !within(session.modelCosts, claim.modelCosts, true)
       || Object.keys(session.providers).length > 0 && !equal(session.totalTokens, total(session.providers))) return null;
   }
@@ -367,6 +295,30 @@ function normalizePeriodEvidence(raw, accepted) {
   return { capturedAt: new Date(raw.capturedAt).toISOString(), events };
 }
 
+function normalizedHistoryClaim(value, accepted) {
+  const usage = historyCounters(value);
+  if (!equal(usage.tokens, usage.perClient.claude?.tokens) || !equal(usage.cost, usage.perClient.claude?.cost)
+    || Object.keys(usage.perClient).some(key => key !== 'claude')
+    || !equal(usage.tokens, numeric(Object.values(usage.perModel).reduce((sum, row) => sum + (row.tokens || 0), 0), 'tokens'))
+    || !equal(usage.cost, numeric(Object.values(usage.perModel).reduce((sum, row) => sum + (row.cost || 0), 0), 'cost'))) return null;
+  for (const field of HISTORY_COUNTERS.filter(key => !['tokens', 'cost'].includes(key))) {
+    const component = ['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens'].includes(field);
+    const rootAvailable = !component || own(accepted, field);
+    const clientAvailable = !component || own(accepted?.perClient?.claude, field);
+    const modelsAvailable = !component || Object.keys(usage.perModel).every(model => own(accepted?.perModel?.[model], field));
+    if (rootAvailable && clientAvailable && !equal(usage[field], usage.perClient.claude?.[field])
+      || field !== 'messages' && rootAvailable && modelsAvailable && !equal(usage[field], numeric(Object.values(usage.perModel).reduce((sum, row) => sum + (row[field] || 0), 0), field))
+      || field !== 'messages' && (usage[field] || 0) > (usage.tokens || 0)) return null;
+  }
+  if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
+    .reduce((sum, field) => sum + (usage[field] || 0), 0) > (usage.tokens || 0)) return null;
+  for (const row of Object.values(usage.perModel)) {
+    if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
+      .reduce((sum, field) => sum + (row[field] || 0), 0) > (row.tokens || 0)) return null;
+  }
+  return usage;
+}
+
 function normalizeHistoryEvidence(raw, accepted) {
   if (!accepted || !raw || !Number.isFinite(Date.parse(raw.capturedAt)) || !Array.isArray(raw.events) || raw.events.length > MAX_EVENTS) return null;
   const daily = new Map((accepted.daily || []).map(day => [day.date, day]));
@@ -384,22 +336,8 @@ function normalizeHistoryEvidence(raw, accepted) {
     for (const day of event.days) {
       if (!DAY.test(day?.date) || eventDays.has(day.date)) return null;
       eventDays.add(day.date);
-      const usage = historyCounters(day.usage);
-      if (!equal(usage.tokens, usage.perClient.claude?.tokens) || !equal(usage.cost, usage.perClient.claude?.cost)
-        || Object.keys(usage.perClient).some(key => key !== 'claude')
-        || !equal(usage.tokens, Object.values(usage.perModel).reduce((sum, v) => sum + (v.tokens || 0), 0))
-        || !equal(usage.cost, Object.values(usage.perModel).reduce((sum, v) => sum + (v.cost || 0), 0))) return null;
-      for (const field of HISTORY_COUNTERS.filter(key => !['tokens', 'cost'].includes(key))) {
-        if (!equal(usage[field], usage.perClient.claude?.[field])
-          || field !== 'messages' && !equal(usage[field], Object.values(usage.perModel).reduce((sum, row) => sum + (row[field] || 0), 0))
-          || field !== 'messages' && (usage[field] || 0) > (usage.tokens || 0)) return null;
-      }
-      if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
-        .reduce((sum, field) => sum + (usage[field] || 0), 0) > (usage.tokens || 0)) return null;
-      for (const row of Object.values(usage.perModel)) {
-        if (['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
-          .reduce((sum, field) => sum + (row[field] || 0), 0) > (row.tokens || 0)) return null;
-      }
+      const usage = normalizedHistoryClaim(day.usage, daily.get(day.date) || day.usage);
+      if (!usage) return null;
       if (daily.has(day.date)) availableHistoryComponents(usage, daily.get(day.date));
       if (daily.has(day.date)) addTree(days.get(day.date) || (days.set(day.date, Object.create(null)), days.get(day.date)), usage);
       const month = day.date.slice(0, 7);
@@ -418,7 +356,7 @@ function normalizeHistoryEvidence(raw, accepted) {
 function normalizeUsageIdentity(raw, record) {
   if (raw?.version !== 1 || raw.eventIdentityVersion !== 2) return null;
   if (raw.encoding) {
-    raw = unpackUsageIdentity(raw);
+    raw = unpackFixedIdentity(raw);
     if (!raw) return null;
   }
   try {

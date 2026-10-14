@@ -4,6 +4,7 @@
 // accounting authority. Native identities stay opaque and version-exact.
 const { extractUsageFromTokscale, normalizePeriod, mergePeriods, canonicalProjectKey } = require('../usage');
 const { parseGraphResult } = require('../history');
+const { rebucketIdentityState, acceptedClaudeWindows } = require('./claudePeriodState');
 const PERIODS = ['today', 'month', 'allTime'];
 const TOKEN_FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
 const EVENT_ID = /^sha256:[0-9a-f]{64}$/;
@@ -184,38 +185,6 @@ function usageIdentityFromState(state, periods) {
     if (identity) result.periods[name] = identity;
   }
   return Object.keys(result.periods).length ? result : null;
-}
-
-// Re-evaluate accepted event days at rollover. Aggregate-only counters cannot
-// establish a new Today/Month window, so those windows use only dated evidence.
-function rebucketIdentityState(state, { todayKey, allTimeSince = '' }) {
-  return Object.fromEntries(PERIODS.map(name => [name, state && {
-    capturedAt: state.capturedAt,
-    events: state.events.map(event => ({ ...event, days: event.days.filter(day => day.date <= todayKey
-      && (name === 'today' ? day.date === todayKey : name === 'month' ? day.date.slice(0, 7) === todayKey.slice(0, 7)
-        : day.date >= allTimeSince)) })).filter(event => event.days.length)
-  }]));
-}
-
-function acceptedClaudeWindows(snapshot, options) {
-  const states = rebucketIdentityState(snapshot.identityState?.allTime, options);
-  const periods = {};
-  for (const name of PERIODS) {
-    const sameWindow = name === 'allTime' || (name === 'today' ? snapshot.dateKey === options.todayKey
-      : snapshot.dateKey.slice(0, 7) === options.todayKey.slice(0, 7));
-    if (sameWindow) {
-      periods[name] = structuredClone(snapshot.periods[name]);
-      states[name] = structuredClone(snapshot.identityState?.[name]);
-    } else {
-      periods[name] = mergePeriods(...(states[name]?.events || []).flatMap(event => event.days.map(day => day.usage)));
-      // Reattach only metadata of sessions that actually contributed in-window.
-      for (const [key, session] of Object.entries(periods[name].sessions || {})) {
-        const metadata = snapshot.periods.allTime.sessions?.[key];
-        for (const field of ['projectId', 'projectLabel', 'title']) if (metadata?.[field]) session[field] = metadata[field];
-      }
-    }
-  }
-  return { periods, identityState: states };
 }
 
 // Accepted App accounting is the only source for retained History proof. This
