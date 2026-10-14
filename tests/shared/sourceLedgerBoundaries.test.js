@@ -196,7 +196,9 @@ test('legacy progression keeps real period windows and never allocates the unkno
   const tomorrow = new Date(now.getTime() + 86400000);
   const day = localTodayKey(tomorrow);
   const period = tokens => extractUsageFromTokscale(native([row('codex', 'new', tokens)]));
-  archive = roundTrip(captureDailyHistoryArchive(archive, graph([row('codex', 'new', 160)], tomorrow), {
+  // The larger whole-period observation includes an undated residual. The
+  // graph supplies only the known dated20, not another dated160 plus today5.
+  archive = roundTrip(captureDailyHistoryArchive(archive, graph([row('codex', 'new', 20)], tomorrow), {
     ...calendar, todayKey: day, sessionUsageArchive: prior, nativePeriods: { today: period(5), month: period(160), allTime: period(160) } }));
   const projected = summary([]);
   const retained = graphFromDailyHistoryArchive([], archive, { ...calendar, todayKey: day });
@@ -896,7 +898,7 @@ test('partial read at the accepted timestamp still locks watch when its exported
   for (const name of ['today', 'month', 'allTime']) assert.equal(watch[name].totalTokens, 45);
 });
 
-test('allTime-only generic evidence stays unallocated instead of fabricating a day from capturedAt', () => {
+test('allTime-only generic evidence stays unallocated while a healthy graph retains its actual dated usage', () => {
   const prior = generic([row('codex', 'unknown-old-ID', 100)]);
   const entry = prior.sessions['codex:unknown-old-ID'];
   delete entry.periods.today;
@@ -910,9 +912,10 @@ test('allTime-only generic evidence stays unallocated instead of fabricating a d
   const result = project(archive, [fresh]);
   assert.equal(result.allTime.totalTokens, 100);
   assert.equal(result.allTime.sessions['codex:unknown-old-ID'].totalTokens, 100);
-  assert.equal(result.today.totalTokens, 0);
-  assert.equal(result.history.summary.totalTokens, 0);
-  assert.deepEqual(archive.sourceLedger.scopes.codex.legacyDays, {});
+  assert.equal(result.today.totalTokens, 20, 'the graph dates new usage, not the old allTime residual');
+  assert.equal(result.history.summary.totalTokens, 20, 'only the new graph has dated evidence');
+  assert.equal(Object.values(archive.sourceLedger.scopes.codex.legacyDays[todayKey].observations)
+    .reduce((sum, value) => sum + value.tokens, 0), 20);
   assert.equal(archive.sourceLedger.scopes.codex.mode, 'legacy');
   assert.equal(updateSessionUsageArchive(prior, result, now).archive.sessions['codex:unknown-old-ID'].periods.allTime.totalTokens, 100);
 });

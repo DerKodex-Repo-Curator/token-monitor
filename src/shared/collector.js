@@ -1641,6 +1641,16 @@ async function collectUsageOnce(options) {
     presentKeys: Object.keys(allTime.sessions || {}),
     paths: sourcePaths
   };
+  // Keep confirmed catalog removals private, like source paths. A missing
+  // metadata read cannot clear a retained title; a matching revoked override can.
+  const revokedTitles = {};
+  for (const [key, metadata] of localSessionMetadataDeps.metadataCache) {
+    if (metadata.invalidatedTitle) revokedTitles[key] = metadata.invalidatedTitle;
+  }
+  for (const key of localSessionMetadataDeps.invalidatedTitleKeys) {
+    if (localSessionMetadataDeps.t3Titles[key]) revokedTitles[key] = localSessionMetadataDeps.t3Titles[key];
+  }
+  if (Object.keys(revokedTitles).length) summary.sessionArchiveSource.revokedTitles = revokedTitles;
   // The request ledger is this source's archive. A second per-session archive
   // would resurrect its contribution after a native rollout takes precedence.
   if (codexLocalView) summary.codexLocalSessionKeys = codexLocalView.sessionKeys;
@@ -1747,6 +1757,9 @@ async function collectUsageOnce(options) {
       options.onSourceArchiveComputed?.(sourceUsage);
       applyAcceptedSourceUsage(summary, sourceUsage, {
         todayKey, timeZone, allTimeSince, clients: normalizedClients,
+        // No graph was read this tick. Retention supplements the fresh native
+        // scan; only a newly accepted full graph may replace its live rows.
+        replaceLive: false,
         nativePeriods: windowsPeriods, nativePartitions, nativeRawPartitions, nativeRawPresence, nativeAnchor: anchorUsed ? anchor : null,
         supplementalPeriods: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
           mergePeriods(wslBundle[name], codexLocalView?.[name] || emptyPeriod())]))

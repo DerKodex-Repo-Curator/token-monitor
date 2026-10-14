@@ -759,10 +759,12 @@ function mergeSession(target, source) {
     const key = normalizeProviderName(provider);
     if (key) target.providers[key] = (target.providers[key] || 0) + Math.max(0, Math.round(asNumber(tokens)));
   }
-  if (source.retained === true && !targetHasLiveSource) {
+  if (source.retained === true && !targetHasLiveSource
+    && (!sourceArchived || !normalizeLiveActivity(target.liveActivity))) {
     target.retained = true;
     target.sourceState = source.sourceState === 'missing' ? 'missing' : 'unknown';
-  } else if (sourceLive || (source.retained !== true && !targetHasLiveSource)) {
+  } else if (sourceLive || (source.retained !== true && !targetHasLiveSource
+    && (!sourceArchived || target.retained !== true))) {
     delete target.retained;
     if (source.sourceState) target.sourceState = source.sourceState;
     else delete target.sourceState;
@@ -770,7 +772,9 @@ function mergeSession(target, source) {
   if (!sourceArchived) {
     if (sourceLive) sessionsWithLiveSource.add(target);
     delete target.archived;
-  } else if (!sessionsWithLiveSource.has(target)) {
+  } else if (!sessionsWithLiveSource.has(target) && !normalizeLiveActivity(target.liveActivity)) {
+    // A registry observation may accompany retained accounting. An archived
+    // peer cannot hide it, and it grants no transcript-live precedence.
     target.archived = true;
   }
   return target;
