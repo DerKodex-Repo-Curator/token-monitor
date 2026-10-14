@@ -39,6 +39,66 @@ function device(name, events, kind = 'native') {
       { capturedAt: NOW, events: events.map(event => ({ ...event, observationKind: kind, sessionId: 'session-a' })) }])) } };
 }
 
+test('root timing proof remains idempotent when accepted optional model throughput is unavailable', () => {
+  const host = device('host', [{ id: id(1), usage: usage(100) }], 'mirror');
+  const peer = device('peer', [{ id: id(1), usage: usage(100) }]);
+  for (const name of ['today', 'month', 'allTime']) {
+    delete host[name].modelThroughput;
+    host[name].capabilities.throughput = false;
+  }
+  for (const evidence of [host.usageIdentity, structuredClone(host.usageIdentity)]) {
+    if (evidence !== host.usageIdentity) for (const period of Object.values(evidence.periods)) {
+      for (const event of period.events) delete event.usage.modelThroughput;
+    }
+    for (const identity of [require('../../src/shared/usageIdentity'), workerIdentity]) {
+      const once = identity.normalizeUsageIdentity(evidence, host);
+      const twice = identity.normalizeUsageIdentity(once, host);
+      assert.deepEqual(twice, once);
+      assert.ok(twice.periods.today);
+      const packed = identity.packUsageIdentity(twice);
+      assert.ok(packed);
+      const restored = identity.normalizeUsageIdentity(packed, host);
+      assert.deepEqual(identity.normalizeUsageIdentity(restored, host), restored);
+      for (const name of ['today', 'month', 'allTime']) {
+        assert.equal(restored.periods[name].events[0].usage.timedTokens, 100);
+        assert.equal(restored.periods[name].events[0].usage.timedOutputTokens, 10);
+      }
+      const repacked = identity.packUsageIdentity(restored);
+      assert.deepEqual(repacked, packed);
+      for (const hub of [require('../../src/shared/usage'), workerUsage]) {
+        const record = hub.normalizeDeviceRecord({ ...host, usageIdentity: repacked });
+        assert.equal(record.periods.today.modelThroughput, undefined);
+        assert.equal(record.periods.today.capabilities.throughput, false);
+        assert.equal(hub.aggregateDevices([syncPayload({ ...host, usageIdentity: twice }), syncPayload(peer)], 600000, Date.parse(NOW)).periods.today.totalTokens, 100);
+      }
+    }
+  }
+});
+
+test('a duplicated event cannot claim a disjoint event reasoning even within the accepted session bound', () => {
+  const shared = { id: id(1), usage: usage(100) };
+  const separate = { id: id(2), usage: usage(200) };
+  separate.usage.sessions['claude:session-a'].reasoningTokens = 20;
+  const host = device('host', [shared, separate], 'mirror');
+  for (const period of Object.values(host.usageIdentity.periods)) period.events.splice(1);
+  const peer = device('peer', [shared]);
+  const forged = structuredClone(host);
+  for (const period of Object.values(forged.usageIdentity.periods)) period.events[0].usage.sessions['claude:session-a'].reasoningTokens = 20;
+  const { packFixedIdentity } = require('../../src/shared/usageIdentityCodec');
+  for (const evidence of [forged.usageIdentity, packFixedIdentity(forged.usageIdentity)]) {
+    assert.ok(evidence);
+    for (const hub of [require('../../src/shared/usage'), workerUsage]) {
+      assert.equal(hub.normalizeDeviceRecord({ ...forged, usageIdentity: evidence }).usageIdentity?.periods.today, undefined);
+      const aggregate = hub.aggregateDevices([{ ...forged, usageIdentity: evidence }, peer], 600000, Date.parse(NOW));
+      assert.equal(aggregate.periods.today.sessions['claude:session-a'].reasoningTokens, 20);
+      assert.equal(aggregate.periods.today.totalTokens, 400);
+    }
+  }
+  const accepted = aggregateDevices([syncPayload(host), syncPayload(peer)], 600000, Date.parse(NOW));
+  assert.equal(accepted.periods.today.totalTokens, 300);
+  assert.equal(accepted.periods.today.sessions['claude:session-a'].reasoningTokens, 20);
+});
+
 test('native events reconcile mirror duplicates across hostnames and keep disjoint turns and every period attribution', () => {
   const shared = { id: id(1), usage: usage(100) };
   const host = device('windows', [shared, { id: id(2), usage: usage(200) }], 'mirror');
@@ -401,4 +461,41 @@ test('AllTime-only proof adds no session/provider detail and unsupported draft e
   assert.ok(normalizeUsageIdentity(packed, record));
   packed.encoding = 'counter-table-v1';
   assert.equal(normalizeUsageIdentity(packed, record), null);
+});
+
+test('session component claims cannot erase another event input or reasoning in raw or fixed evidence', () => {
+  const primitive = (input, output = 0) => normalizePeriod(require('../../src/shared/usage').extractUsageFromTokscale({
+    entries: [{ client: 'claude', sessionId: 'session-a', model: 'model', provider: 'anthropic', input, output, cost: 0 }]
+  }));
+  const mirror = device('host', [{ id: id(1), usage: primitive(100) }, { id: id(2), usage: primitive(1000) }], 'mirror');
+  const native = device('remote', [{ id: id(1), usage: primitive(100) }]);
+  const canonical = normalizeUsageIdentity(mirror.usageIdentity, mirror);
+  canonical.periods = { today: { ...canonical.periods.today, events: [canonical.periods.today.events[0]] } };
+  const fixed = packUsageIdentity(canonical);
+  const forgedRaw = structuredClone(canonical);
+  forgedRaw.periods.today.events[0].usage.sessions['claude:session-a'].inputTokens = 1100;
+  assert.equal(packUsageIdentity(forgedRaw), null);
+  const forgedFixed = structuredClone(fixed);
+  forgedFixed.events[0][4][1][0][0][4] = 1100;
+  for (const implementation of [{ normalizeUsageIdentity, aggregateDevices },
+    { normalizeUsageIdentity: workerIdentity.normalizeUsageIdentity, aggregateDevices: workerUsage.aggregateDevices }]) {
+    for (const evidence of [forgedRaw, forgedFixed]) {
+      assert.equal(implementation.normalizeUsageIdentity(evidence, mirror), null);
+      const result = implementation.aggregateDevices([{ ...mirror, usageIdentity: evidence }, native], 600000, Date.parse(NOW));
+      assert.equal(result.periods.today.totalTokens, 1200);
+      assert.equal(result.periods.today.sessions['claude:session-a'].inputTokens, 1200);
+    }
+    const valid = implementation.aggregateDevices([{ ...mirror, usageIdentity: fixed }, native], 600000, Date.parse(NOW));
+    assert.equal(valid.periods.today.totalTokens, 1100);
+    assert.equal(valid.periods.today.sessions['claude:session-a'].inputTokens, 1100);
+  }
+  for (const field of ['reasoningTokens', 'timedOutputTokens']) {
+    const raw = structuredClone(canonical);
+    raw.periods.today.events[0].usage.sessions['claude:session-a'][field] = 1;
+    assert.equal(packUsageIdentity(raw), null, field);
+    const wire = structuredClone(fixed);
+    wire.events[0][4][1][0][0][field === 'reasoningTokens' ? 8 : 9] = 1;
+    assert.equal(normalizeUsageIdentity(wire, mirror), null, field);
+    assert.equal(workerIdentity.normalizeUsageIdentity(wire, mirror), null, field);
+  }
 });

@@ -37,7 +37,8 @@ test('fixed schema rejects malformed types, widths, duplicate IDs and nested cal
     value => { value.events[0][4][1][0][2][0][1] = -1; },
     value => { value.periods.today.events = [0, 0]; },
     value => { value.periods.today.clientModels = { claude: { model: 10 } }; },
-    value => { value.events[0][4][0][0][1] = { path: ['models', 'model'], value: 12 }; }
+    value => { value.events[0][4][0][0][1] = { path: ['models', 'model'], value: 12 }; },
+    value => { value.events[0][4][3] = [1, 0, 1]; value.events[0][4][0][0][8] = 1; }
   ]) {
     const bad = structuredClone(wire); corrupt(bad);
     for (const implementation of [normalizeUsageIdentity, workerIdentity.normalizeUsageIdentity]) {

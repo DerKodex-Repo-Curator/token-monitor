@@ -639,3 +639,69 @@ test('unsupported original network watches safely retry polling then report inte
     else process.env.TOKEN_MONITOR_SHARED_DIR = originalShared;
   }
 });
+
+for (const freshTokens of [20, 15]) {
+  test(`cached retained ledger cannot claim a fresh disjoint native full capture at ${freshTokens} tokens`, async t => {
+    const { aggregateDevices } = require('../../src/shared/usage');
+    const { syncPayload } = require('../../src/shared/syncPayload');
+    const options = base(t, { historyEnabled: true, includeHistory: true, dailyHistoryArchiveEnabled: true,
+      getSessionUsageArchive: () => ({ version: 1, sessions: {} }) });
+    options.dailyHistoryArchiveOptions = { path: path.join(options.homeDir, 'daily.json') };
+    let projection;
+    const original = [event('A', 15, 'mirror')];
+    await collectUsageOnce({ ...options, onSourceArchiveComputed: value => { projection = value; },
+      runTokscale: async () => report(original), runGraph: async () => graph(original, {}) });
+    const fresh = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection,
+      runTokscale: async () => report([event('B', freshTokens, 'mirror')]),
+      runGraph: () => { throw new Error('native full refresh must not read History'); } });
+    const peer = await collectUsageOnce({ ...base(t), deviceId: 'remote',
+      runTokscale: async () => report([event('A', 15, 'native')]) });
+    for (const name of ['today', 'month', 'allTime']) {
+      assert.equal(fresh[name].totalTokens, freshTokens, 'cached projection keeps fresh native counters');
+      assert.equal(fresh.usageIdentity?.periods?.[name], undefined, 'cached ledger grants no proof over a fresh native revision');
+    }
+    const at = now.getTime();
+    for (const records of [[fresh, peer], [syncPayload(fresh), syncPayload(peer)]]) {
+      const aggregate = aggregateDevices(records, 600000, at);
+      for (const name of ['today', 'month', 'allTime']) assert.equal(aggregate.periods[name].totalTokens, freshTokens + 15);
+    }
+  });
+}
+
+test('full retained timed events preserve root-bound period proof without enabling model throughput', async t => {
+  const { aggregateDevices } = require('../../src/shared/usage');
+  const workerUsage = require('../../worker/src/shared/usage');
+  const { syncPayload } = require('../../src/shared/syncPayload');
+  const options = base(t, { historyEnabled: true, includeHistory: true, dailyHistoryArchiveEnabled: true,
+    getSessionUsageArchive: () => ({ version: 1, sessions: {} }) });
+  options.dailyHistoryArchiveOptions = { path: path.join(options.homeDir, 'daily.json') };
+  const timed = event('A', 80, 'mirror');
+  timed.contributions[0].tokens.output = 20;
+  timed.contributions[0].performance = { timedTokens: 100, timedOutputTokens: 20, totalDurationMs: 1000 };
+  const timedReport = events => {
+    const result = report(events);
+    for (const row of result.entries) Object.assign(row, { output: 20, performance: timed.contributions[0].performance });
+    return result;
+  };
+  let projection;
+  const first = await collectUsageOnce({ ...options, onSourceArchiveComputed: value => { projection = value; },
+    runTokscale: async () => timedReport([timed]), runGraph: async () => graph([timed], {}) });
+  const retained = await collectUsageOnce({ ...options, sourceArchiveSnapshot: projection,
+    runTokscale: async () => report([]), runGraph: async () => graph([], {}) });
+  const native = structuredClone(timed);
+  native.observationKind = 'native';
+  const peer = await collectUsageOnce({ ...base(t), deviceId: 'remote', runTokscale: async () => timedReport([native]) });
+  for (const name of ['today', 'month', 'allTime']) {
+    assert.equal(first.usageIdentity.periods[name].events.length, 1);
+    assert.equal(retained[name].totalTokens, 100);
+    assert.equal(retained[name].timedTokens, 100);
+    assert.equal(retained[name].modelThroughput, undefined);
+    assert.equal(retained[name].capabilities.throughput, false);
+    assert.equal(retained.usageIdentity.periods[name].events.length, 1);
+  }
+  assert.equal(retained.usageIdentity.history.events.length, 1);
+  for (const hub of [{ aggregateDevices }, workerUsage]) {
+    const result = hub.aggregateDevices([syncPayload(retained), syncPayload(peer)], 600000, now.getTime());
+    for (const name of ['today', 'month', 'allTime']) assert.equal(result.periods[name].totalTokens, 100);
+  }
+});

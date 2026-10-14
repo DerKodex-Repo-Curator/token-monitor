@@ -238,15 +238,23 @@ function normalizedPeriodClaim(raw, accepted) {
     if (['modelCacheReads', 'modelCacheWrites', 'modelOutputs', 'modelUnclassifiedTokens']
       .reduce((sum, field) => sum + (claim[field][model] || 0), 0) > tokens) return null;
   }
-  for (const field of ['timedTokens', 'timedOutputTokens', 'timedDurationMs']) {
-    if (!equal(claim[field], numeric(Object.values(claim.modelThroughput || {}).reduce((sum, row) => sum + (row[field] || 0), 0), field))) return null;
+  if (claim.modelThroughput) for (const field of ['timedTokens', 'timedOutputTokens', 'timedDurationMs']) {
+    if (!equal(claim[field], numeric(Object.values(claim.modelThroughput).reduce((sum, row) => sum + (row[field] || 0), 0), field))) return null;
   }
   for (const [key, session] of Object.entries(claim.sessions)) {
     if (!key.startsWith('claude:') || !equal(session.totalTokens, total(session.models))
       || !equal(session.costUsd, total(session.modelCosts, true))
+      || ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens']
+        .reduce((sum, field) => sum + (session[field] || 0), 0) > (session.totalTokens || 0)
+      || (session.reasoningTokens || 0) > (session.outputTokens || 0)
+      || (session.timedOutputTokens || 0) > (session.outputTokens || 0)
       || !within(session.models, claim.models) || !within(session.modelCosts, claim.modelCosts, true)
       || Object.keys(session.providers).length > 0 && !equal(session.totalTokens, total(session.providers))) return null;
   }
+  const representedInput = Object.values(claim.sessions).reduce((sum, session) => sum + (session.inputTokens || 0), 0);
+  const eventInput = (claim.totalTokens || 0) - ['cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'unclassifiedTokens']
+    .reduce((sum, field) => sum + (claim[field] || 0), 0);
+  if (representedInput > eventInput) return null;
   for (const project of Object.values(claim.projects)) {
     if (Object.keys(project.clients).some(client => client !== 'claude')
       || !equal(project.tokens, project.clients.claude)) return null;
@@ -263,7 +271,6 @@ function normalizedPeriodClaim(raw, accepted) {
   for (const field of ['sessions', 'projects']) {
     for (const key of Object.keys(claim[field])) if (!own(accepted?.[field], key)) delete claim[field][key];
   }
-  if (!accepted?.modelThroughput) delete claim.modelThroughput;
   return claim;
 }
 
@@ -291,7 +298,13 @@ function normalizePeriodEvidence(raw, accepted) {
     addTree(sum, usage);
     events.push({ ...header, usage });
   }
-  if (!within(sum, periodCounters(accepted))) return null;
+  const bound = periodCounters(accepted);
+  // Retained records can keep root timing while deliberately omitting optional
+  // model throughput. Keep the claim's internally conserved timing for stable
+  // normalize/pack round trips, but never require or create an unavailable map.
+  const bounded = { ...sum };
+  if (!accepted?.modelThroughput) delete bounded.modelThroughput;
+  if (!within(bounded, bound)) return null;
   return { capturedAt: new Date(raw.capturedAt).toISOString(), events };
 }
 

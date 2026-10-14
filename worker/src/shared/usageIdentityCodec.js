@@ -44,7 +44,8 @@ function packFixedIdentity(identity) {
     Object.values(omitSessions ? {} : usage.sessions || {}).map(session => [values(session, SESSION_FIELDS),
       allocations(session.models, session.modelCosts, 'models'), allocations(session.providers, null, 'providers')]),
     Object.entries(usage.projects || {}).sort(([a], [b]) => a.localeCompare(b)).map(([project, row]) =>
-      [index('projects', project), ...values(row, ['tokens', 'costUsd', 'unpricedTokens'])])
+      [index('projects', project), ...values(row, ['tokens', 'costUsd', 'unpricedTokens'])]),
+    ...(!usage.modelThroughput ? [values(usage, TIMING)] : [])
   ];
   const history = days => days.map(({ date, usage }) => [date, usage.messages || 0,
     components(usage), components(usage.perClient.claude),
@@ -54,7 +55,7 @@ function packFixedIdentity(identity) {
   const cores = new Map();
   const add = (event, allTime = false) => {
     const body = event.usage ? period(event.usage, allTime) : history(event.days);
-    const core = event.usage && JSON.stringify([event.id, event.observationKind, body[0], body[2]]);
+    const core = event.usage && JSON.stringify([event.id, event.observationKind, body[0], body[2], body[3]]);
     // Only complete non-session accounting equality permits AllTime to reuse a
     // Today/Month row; its reference always strips session identity and detail.
     if (allTime && cores.has(core)) return cores.get(core);
@@ -128,7 +129,8 @@ function unpackFixedIdentity(raw) {
       }
     };
     const period = (body, sessionId) => {
-      array(body, 3, 3);
+      array(body, 4);
+      if (body.length !== 3 && body.length !== 4) fail();
       const usage = dict();
       MODEL_FIELDS.forEach(field => { usage[field] = dict(); });
       CLIENT_FIELDS.forEach(field => { usage[field] = dict(); });
@@ -146,6 +148,12 @@ function unpackFixedIdentity(raw) {
         }
         if (Object.keys(timing).length) usage.modelThroughput[model] = timing;
       });
+      if (body.length === 4) {
+        if (Object.keys(usage.modelThroughput).length) fail();
+        const timing = counterRow(body[3], TIMING);
+        delete usage.modelThroughput;
+        for (const field of TIMING) usage[field] = timing[field] || 0;
+      }
       ROOT_FIELDS.forEach((field, i) => { if (usage[field]) usage[CLIENT_FIELDS[i]].claude = usage[field]; });
       for (const [field, modelField] of [['clientModels', 'models'], ['clientModelCosts', 'modelCosts'], ['clientModelUnpricedTokens', 'modelUnpricedTokens']]) {
         usage[field] = { claude: { ...usage[modelField] } };

@@ -81,6 +81,8 @@ Watch title changes and confirmed removals must survive later read misses and re
 
 Claude period snapshots keep the last accepted native counters and event claims together when archive retention is disabled. Their coverage is limited to the scanned windows; they do not grant the full-history replacement authority of the retained source ledger. A partial read preserves the accepted Claude snapshot while other client partitions remain fresh. The collector supplies native read/root evidence to `usage/claudePeriodState.js`, which owns acceptance, rollover and projection without archive I/O.
 
+Event proof must describe the revision selected for published counters. A History-disabled full refresh that keeps fresh native counters cannot reuse cached ledger period claims, even when totals match. Retained root timing remains independently usable for proof when the accepted projection intentionally disables optional model throughput; normalization and encoding must preserve that distinction without enabling throughput again.
+
 ### Watching
 
 - There is no cooldown on top of the debounce, because the product promises 3–5 s updates. The debounce is instead capped by `watchMaxWaitMs` (5 s, floored at the debounce), because a trailing debounce never fires while agents keep writing faster than it. Time behind an in-flight tick does not count toward the cap, so a slow tick cannot chain scans back-to-back.

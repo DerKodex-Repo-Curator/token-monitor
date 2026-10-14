@@ -160,6 +160,9 @@ function nonnegativeCountersFit(claim, counter, terms = 1) {
 function validatedPeriodIdentity(identity, period) {
   if (!identity || !identity.events.length) return null;
   const total = mergePeriods(...identity.events.map(event => event.usage));
+  // Retention intentionally disables optional model throughput, while accepted
+  // root timing remains available. Match the sanitizer's available dimensions.
+  if (!period?.modelThroughput) delete total.modelThroughput;
   return nonnegativeCountersFit(total, normalizePeriod(period), identity.events.length) ? identity : null;
 }
 
