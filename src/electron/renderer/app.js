@@ -32,6 +32,7 @@ function renderAccountShellError(id) {
 }
 const { clientColors, fallbackModelColors, modelVendorFor, modelColor } = window.TokenMonitorUsageCharts;
 const motionPreferenceApi = window.TokenMonitorMotionPreference;
+const tokenNumberAnimationApi = window.TokenMonitorTokenNumberAnimation;
 const windowsGlassApi = window.TokenMonitorWindowsGlass;
 const macBackdropApi = window.TokenMonitorMacBackdropMode;
 const glassRenderingApi = window.TokenMonitorGlassRendering;
@@ -98,6 +99,7 @@ const LIMIT_PROVIDER_ACCOUNT_NODES = {
   kimi: { group: 'kimiAccountGroup', status: 'kimiAccountStatus' },
   copilot: { group: 'copilotAccountGroup', status: 'copilotApiTokenStatus' },
   mimo: { group: 'mimoAccountGroup', status: 'mimoAccountStatus' },
+  workbuddy: { group: 'workbuddyAccountGroup', status: 'workbuddyAccountStatus' },
   openrouter: { group: 'openrouterAccountGroup', status: 'openrouterStatus' },
   volcengine: { group: 'volcengineAccountGroup', status: 'volcengineAccountStatus' },
   thirdparty: { group: 'thirdpartyAccountGroup', status: 'thirdpartyStatus' }
@@ -188,6 +190,7 @@ const {
   rowRenderFingerprint,
   rowWidth,
   shouldAnimateBreakdownRows,
+  visibleBreakdownNumberRows,
   toolIconsEnabled
 } = breakdownRenderPolicyApi;
 const deviceBreakdownApi = window.TokenMonitorDeviceBreakdown;
@@ -306,7 +309,7 @@ function normalizeInitialViewValue(value, allowed, fallback) {
   return allowed.has(raw) ? raw : fallback;
 }
 
-const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), appUpdate: null, breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, windowVisible: new URLSearchParams(window.location.search).get('windowHidden') !== '1', stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, serviceStatus: null, serviceStatusBusy: false, serviceProvidersExpanded: false, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, serviceStatusTicker: null, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, systemDarkUi: false, tokscaleStatus: null, hubInfo: null, hubBuildStatus: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, factoryAccountExpanded: false, factoryPendingCheckSince: 0, clineAccountExpanded: false, clinePendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, volcengineAgentExpanded: false, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', antigravityAccountExpanded: false, antigravityAccountError: '', antigravitySignInBusy: false, copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', floatingBubble: initialFloatingBubble, suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false, toolSearchQuery: '', limitProviderSearchQuery: '', accountPanelMessages: {} };
+const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), appUpdate: null, breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, windowVisible: new URLSearchParams(window.location.search).get('windowHidden') !== '1', stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, serviceStatus: null, serviceStatusBusy: false, serviceProvidersExpanded: false, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, serviceStatusTicker: null, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, systemDarkUi: false, tokscaleStatus: null, hubInfo: null, hubBuildStatus: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, factoryAccountExpanded: false, factoryPendingCheckSince: 0, clineAccountExpanded: false, clinePendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, volcengineAgentExpanded: false, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', antigravityAccountExpanded: false, antigravityAccountError: '', antigravitySignInBusy: false, workbuddyAccountExpanded: false, workbuddyAccountError: '', workbuddySignInBusy: false, workbuddyCancelBusy: false, workbuddyMutationBusy: false, workbuddyLoginAttempt: 0, workbuddyLoginStatusKey: '', workbuddyAccountsRevision: 0, copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', floatingBubble: initialFloatingBubble, suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false, toolSearchQuery: '', limitProviderSearchQuery: '', accountPanelMessages: {} };
 state.devinAccountExpanded = false;
 state.devinPendingCheckSince = 0;
 state.icloudStatus = null;
@@ -357,7 +360,7 @@ state.projectSettingsExpanded = false;
 state.sessionSettingsExpanded = false;
 state.homeActivitySettingsExpanded = false;
 state.settingsSections = Object.fromEntries(SETTINGS_SECTION_IDS.map((id) => [id, false]));
-const defaultAppearance = { glassOpacity: 68, glassBlur: 32, backgroundImageOpacity: 28, zoomFactor: 1, systemGlass: true, windowsBackdrop: 'acrylic', macBackdrop: 'vibrancy', reduceMotion: 'system', showLiveDot: true, showToolIcons: true, titleIconOnly: true, showCompactTotalTokens: false, showLiveTokenRate: false, liveTokenRateScope: 'all', compactTokenUnits: 'western', settingsInTitlebar: false };
+const defaultAppearance = { glassOpacity: 68, glassBlur: 32, backgroundImageOpacity: 28, zoomFactor: 1, systemGlass: true, windowsBackdrop: 'acrylic', macBackdrop: 'vibrancy', reduceMotion: 'system', tokenNumberAnimation: 'roll', showLiveDot: true, showToolIcons: true, titleIconOnly: true, showCompactTotalTokens: false, showLiveTokenRate: false, liveTokenRateScope: 'all', compactTokenUnits: 'western', settingsInTitlebar: false };
 let nativeMaterialState = glassRenderingApi.normalizeNativeMaterialState();
 let nativeMaterialRevision = 0;
 let appearancePreview = {};
@@ -501,6 +504,7 @@ Object.assign(els, {
   appUpdateReleaseNotesButton: document.getElementById('appUpdateReleaseNotesButton'),
   appUpdateMessage: document.getElementById('appUpdateMessage'),
   titleIconInput: document.getElementById('titleIconInput'),
+  tokenNumberAnimationInput: document.getElementById('tokenNumberAnimationInput'),
   showCompactTotalTokensInput: document.getElementById('showCompactTotalTokensInput'),
   showLiveTokenRateInput: document.getElementById('showLiveTokenRateInput'),
   liveTokenRateScopeRow: document.getElementById('liveTokenRateScopeRow'),
@@ -1662,7 +1666,10 @@ function easeOutQuart(t) { return 1 - Math.pow(1 - t, 4); }
 let numberAnimHandle = 0;
 let numberAnimTarget = null;
 let numberAnimValue = 0;
+let settleNumberRoll = null;
 function cancelNumberAnimation() {
+  settleNumberRoll?.();
+  settleNumberRoll = null;
   if (numberAnimHandle) cancelAnimationFrame(numberAnimHandle);
   numberAnimHandle = 0;
   numberAnimTarget = null;
@@ -1672,7 +1679,9 @@ function headlineNumberIsAnimatingTo(value) {
   return Boolean(numberAnimHandle) && numberAnimTarget === value;
 }
 
-function animateNumber(el, from, to, duration = 1000, onDone = null) {
+function animateNumber(el, from, to, duration = 1000, onDone = null, { synchronized = false } = {}) {
+  const rolling = tokenNumberAnimationApi.normalize(state.settings?.tokenNumberAnimation) === 'roll';
+  const rollSnapshot = rolling ? tokenNumberAnimationApi.capture(el) : null;
   cancelNumberAnimation();
   if (prefersReducedMotion()) {
     el.textContent = formatNumber(to);
@@ -1680,17 +1689,28 @@ function animateNumber(el, from, to, duration = 1000, onDone = null) {
     if (typeof onDone === 'function') onDone();
     return;
   }
+  if (rolling) {
+    duration = tokenNumberAnimationApi.duration;
+    settleNumberRoll = tokenNumberAnimationApi.beginRoll(el, formatNumber(from), formatNumber(to), to > from, () => {
+      el.textContent = formatNumber(to);
+      updateTotalCompact(to);
+    }, rollSnapshot, { period: synchronized });
+  }
   const start = performance.now();
   const delta = to - from;
   numberAnimTarget = to;
-  numberAnimValue = from;
+  numberAnimValue = rolling ? to : from;
   function frame(now) {
     const progress = Math.min(1, (now - start) / duration);
-    numberAnimValue = from + delta * easeOutQuart(progress);
-    el.textContent = formatNumber(numberAnimValue);
+    if (!rolling) {
+      numberAnimValue = from + delta * easeOutQuart(progress);
+      el.textContent = formatNumber(numberAnimValue);
+    }
     if (progress < 1) {
       numberAnimHandle = requestAnimationFrame(frame);
     } else {
+      settleNumberRoll?.();
+      settleNumberRoll = null;
       numberAnimHandle = 0;
       numberAnimTarget = null;
       numberAnimValue = to;
@@ -1700,12 +1720,13 @@ function animateNumber(el, from, to, duration = 1000, onDone = null) {
   numberAnimHandle = requestAnimationFrame(frame);
 }
 
-function animateTotalNumber(el, from, to, duration) {
-  animateNumber(el, from, to, duration, () => updateTotalCompact(to));
+function animateTotalNumber(el, from, to, duration, options) {
+  animateNumber(el, from, to, duration, () => updateTotalCompact(to), options);
 }
 
 const rowNumberAnimations = new Map();
 const rowBarAnimations = new Map();
+let breakdownNumberMotionVisibleOnly = false;
 const rowRenderFingerprints = new WeakMap();
 const toolDetailData = new WeakMap();
 
@@ -1719,19 +1740,24 @@ function settleMotionAnimations() {
   numberAnimValue = state.currentTotal;
   els.totalTokens.textContent = formatNumber(state.currentTotal);
   updateTotalCompact(state.currentTotal);
+  settleRowNumberAnimations();
+  limitResetAnimator.settle(els.limitsPanel);
+  for (const animation of document.getAnimations?.() || []) {
+    try { animation.finish(); } catch (_) { animation.cancel(); }
+  }
+  rowBarAnimations.clear();
+}
+
+function settleRowNumberAnimations() {
   for (const [el, motion] of rowNumberAnimations) {
     cancelAnimationFrame(motion.handle);
+    motion.settleRoll?.();
     const target = Number(motion.target ?? el.dataset.motionTarget ?? el.dataset.motionValue ?? 0);
     el.textContent = formatNumber(target);
     el.dataset.motionValue = String(target);
     delete el.dataset.motionTarget;
   }
   rowNumberAnimations.clear();
-  limitResetAnimator.settle(els.limitsPanel);
-  for (const animation of document.getAnimations?.() || []) {
-    try { animation.finish(); } catch (_) { animation.cancel(); }
-  }
-  rowBarAnimations.clear();
 }
 
 function applyReduceMotionPreference(value) {
@@ -1743,26 +1769,41 @@ function applyReduceMotionPreference(value) {
 
 function captureBreakdownMotion() {
   const rows = Array.from(els.breakdown?.querySelectorAll('.row[data-key]') || []);
-  if (!shouldAnimateBreakdownRows(rows.length, { reducedMotion: prefersReducedMotion() })) return null;
+  if (prefersReducedMotion()) return null;
+  const animateLayout = shouldAnimateBreakdownRows(rows.length, { reducedMotion: prefersReducedMotion() });
+  if (!animateLayout && state.breakdown !== 'session') return null;
+  const visibleNumbersOnly = !animateLayout || tokenNumberAnimationApi.normalize(state.settings?.tokenNumberAnimation) === 'roll';
+  const motionRows = new Set(!visibleNumbersOnly ? rows : visibleBreakdownNumberRows(rows,
+    els.breakdown.getBoundingClientRect(), row => row.querySelector('.row-value')?.getBoundingClientRect()));
   const snapshot = new Map();
   for (const row of rows) {
-    const rect = row.getBoundingClientRect();
-    const fill = row.querySelector('.bar-fill');
+    // Keep cheap old values for every key: a reordered row may become visible
+    // after the update. Only visible readings need a glyph/layout snapshot.
+    const valueEl = row.querySelector('.row-value');
+    const rect = animateLayout ? row.getBoundingClientRect() : null;
+    const fill = animateLayout ? row.querySelector('.bar-fill') : null;
     const trackWidth = fill?.parentElement?.getBoundingClientRect().width || 0;
     const fillWidth = fill?.getBoundingClientRect().width || 0;
     snapshot.set(row.dataset.key, {
-      top: rect.top,
-      value: Number(row.querySelector('.row-value')?.dataset.motionValue || row.dataset.motionValue || 0),
+      layoutCaptured: animateLayout,
+      top: rect?.top,
+      value: Number(valueEl?.dataset.motionValue || row.dataset.motionValue || 0),
+      rollSnapshot: motionRows.has(row) ? tokenNumberAnimationApi.capture(valueEl) : null,
       barScale: trackWidth > 0 ? Math.max(0, Math.min(1, fillWidth / trackWidth)) : 0
     });
   }
   return snapshot;
 }
 
-function animateRowNumber(el, from, to, duration = 420) {
+function animateRowNumber(el, from, to, duration = 420, capturedRoll = null, { synchronized = false } = {}) {
   const previous = rowNumberAnimations.get(el);
-  if (previous?.target === to) return;
-  if (previous) cancelAnimationFrame(previous.handle);
+  if (previous?.target === to && !prefersReducedMotion()) return;
+  const rolling = tokenNumberAnimationApi.normalize(state.settings?.tokenNumberAnimation) === 'roll';
+  const rollSnapshot = rolling ? capturedRoll || tokenNumberAnimationApi.capture(el) : null;
+  if (previous) {
+    cancelAnimationFrame(previous.handle);
+    previous.settleRoll?.();
+  }
   const startValue = Number.isFinite(previous?.value) ? previous.value : from;
   if (!Number.isFinite(startValue) || !Number.isFinite(to) || startValue === to || prefersReducedMotion()) {
     el.textContent = formatNumber(to);
@@ -1774,11 +1815,19 @@ function animateRowNumber(el, from, to, duration = 420) {
   const startedAt = performance.now();
   const delta = to - startValue;
   const motion = { handle: 0, target: to, value: startValue };
-  el.textContent = formatNumber(startValue);
-  el.dataset.motionValue = String(startValue);
+  if (rolling) {
+    duration = tokenNumberAnimationApi.duration;
+    motion.value = to;
+    motion.settleRoll = tokenNumberAnimationApi.beginRoll(el, formatNumber(startValue), formatNumber(to), to > startValue, null, rollSnapshot,
+      { period: synchronized, whole: synchronized });
+  } else {
+    el.textContent = formatNumber(startValue);
+  }
+  el.dataset.motionValue = String(motion.value);
   el.dataset.motionTarget = String(to);
   function frame(now) {
     if (prefersReducedMotion()) {
+      motion.settleRoll?.();
       el.textContent = formatNumber(to);
       el.dataset.motionValue = String(Number(to) || 0);
       delete el.dataset.motionTarget;
@@ -1786,12 +1835,15 @@ function animateRowNumber(el, from, to, duration = 420) {
       return;
     }
     const progress = Math.min(1, (now - startedAt) / duration);
-    motion.value = startValue + delta * easeOutQuart(progress);
-    el.textContent = formatNumber(motion.value);
-    el.dataset.motionValue = String(motion.value);
+    if (!rolling) {
+      motion.value = startValue + delta * easeOutQuart(progress);
+      el.textContent = formatNumber(motion.value);
+      el.dataset.motionValue = String(motion.value);
+    }
     if (progress < 1) {
       motion.handle = requestAnimationFrame(frame);
     } else {
+      motion.settleRoll?.();
       delete el.dataset.motionTarget;
       if (rowNumberAnimations.get(el) === motion) rowNumberAnimations.delete(el);
     }
@@ -1804,16 +1856,43 @@ function cancelRowNumberAnimation(el) {
   if (!el) return;
   const motion = rowNumberAnimations.get(el);
   if (motion) cancelAnimationFrame(motion.handle);
+  motion?.settleRoll?.();
   rowNumberAnimations.delete(el);
   delete el.dataset.motionTarget;
 }
 
-function animateBreakdownFrom(snapshot, { duration = 420 } = {}) {
-  if (!snapshot) return;
+function settleOffscreenBreakdownNumbers() {
+  if (!breakdownNumberMotionVisibleOnly || rowNumberAnimations.size === 0) return;
+  const visible = new Set(visibleBreakdownNumberRows([...rowNumberAnimations.keys()],
+    els.breakdown.getBoundingClientRect(), el => el.getBoundingClientRect()));
+  for (const [el, motion] of rowNumberAnimations) {
+    if (visible.has(el)) continue;
+    cancelRowNumberAnimation(el);
+    el.textContent = formatNumber(motion.target);
+    el.dataset.motionValue = String(motion.target);
+  }
+}
+
+// A period switch (synchronized) starts every row on the headline's frame,
+// each sweeping its own reading left to right; live updates keep the gentle
+// entering stagger.
+function animateBreakdownFrom(snapshot, { duration = 420, synchronized = false } = {}) {
+  if (!snapshot || prefersReducedMotion()) return;
   const rows = Array.from(els.breakdown?.querySelectorAll('.row[data-key]') || []);
-  if (!shouldAnimateBreakdownRows(rows.length, { reducedMotion: prefersReducedMotion() })) return;
+  const animateLayout = shouldAnimateBreakdownRows(rows.length, { reducedMotion: prefersReducedMotion() });
+  if (!animateLayout && state.breakdown !== 'session') return;
+  breakdownNumberMotionVisibleOnly = !animateLayout || tokenNumberAnimationApi.normalize(state.settings?.tokenNumberAnimation) === 'roll';
+  const motionRows = !breakdownNumberMotionVisibleOnly ? rows : visibleBreakdownNumberRows(rows,
+    els.breakdown.getBoundingClientRect(), row => row.querySelector('.row-value')?.getBoundingClientRect());
+  const animatedValues = new Set(motionRows.map(row => row.querySelector('.row-value')));
+  for (const [el, motion] of rowNumberAnimations) {
+    if (animatedValues.has(el)) continue;
+    cancelRowNumberAnimation(el);
+    el.textContent = formatNumber(motion.target);
+    el.dataset.motionValue = String(motion.target);
+  }
   let enteringIndex = 0;
-  for (const row of rows) {
+  for (const row of motionRows) {
     // An unavailable native session value must stay a semantic label. The
     // ordinary row-number tween formats its zero placeholder as "0", which
     // would turn unknown data into a false numeric reading after every render.
@@ -1823,6 +1902,19 @@ function animateBreakdownFrom(snapshot, { duration = 420 } = {}) {
     }
     const previous = snapshot.get(row.dataset.key);
     const value = Number(row.dataset.motionValue || 0);
+    const valueEl = row.querySelector('.row-value');
+    const animateReading = () => {
+      if (!breakdownNumberMotionVisibleOnly || !previous || previous.value !== value || rowNumberAnimations.has(valueEl)) {
+        animateRowNumber(valueEl, previous?.value ?? 0, value,
+          duration, previous?.rollSnapshot, { synchronized });
+      }
+    };
+    // Crossing back under the row budget cannot recover the old geometry.
+    // Keep number motion, but do not treat the uncaptured bar scale as zero.
+    if (!animateLayout || previous?.layoutCaptured === false) {
+      animateReading();
+      continue;
+    }
     const fill = row.querySelector('.bar-fill');
     const targetScale = Math.max(0, Math.min(1, Number(fill?.style.getPropertyValue('--bar-scale')) || 0));
     if (previous) {
@@ -1834,23 +1926,28 @@ function animateBreakdownFrom(snapshot, { duration = 420 } = {}) {
         ], { duration: 280, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
       }
       animateBarBetween(fill, previous.barScale, targetScale, 0, duration);
-      animateRowNumber(row.querySelector('.row-value'), previous.value, value, duration);
+      animateReading();
       continue;
     }
+    const delay = synchronized ? 0 : Math.min(enteringIndex, 6) * 18;
     row.animate([
       { opacity: 0, transform: 'translate3d(0, 7px, 0)' },
       { opacity: 1, transform: 'translate3d(0, 0, 0)' }
     ], {
       duration: 240,
-      delay: Math.min(enteringIndex, 6) * 18,
+      delay,
       easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
       fill: 'backwards'
     });
-    const delay = Math.min(enteringIndex, 6) * 18;
     animateBarBetween(fill, 0, targetScale, delay, Math.max(1, duration - delay));
-    animateRowNumber(row.querySelector('.row-value'), 0, value, duration);
+    animateReading();
     enteringIndex += 1;
   }
+}
+
+function periodBreakdownMotionDuration() {
+  return tokenNumberAnimationApi.normalize(state.settings?.tokenNumberAnimation) === 'roll'
+    ? tokenNumberAnimationApi.layoutDuration : 800;
 }
 
 function animateBarBetween(
@@ -2050,6 +2147,9 @@ const overflowText = window.TokenMonitorOverflowText.create({
   onLeave: () => requestAnimationFrame(() => {
     if (homeSessionRenderPending && state.breakdown === 'home'
       && visibleStatsSurface() === 'main' && state.stats) renderHome();
+    // A final stats update may have been held before reading or before painting.
+    // Reuse the refresh guards to catch up without waiting for another push.
+    if (state.openSession?.kind === 'session') void refreshOpenSessionDetail();
   })
 });
 
@@ -2484,7 +2584,12 @@ function updateRow(row, { name, subtitle, subtitleIdentity, subagentCountLabel, 
     valueEl.textContent = t('detailTokenUnavailable') || 'Unavailable';
   } else {
     delete row.dataset.tokenDataUnavailable;
-    valueEl.textContent = formatNumber(value);
+    // Metadata-only updates must not replace the glyphs of a matching roll.
+    // Changed readings are restarted from the captured visual value below.
+    if (rowNumberAnimations.get(valueEl)?.target !== Number(value)) {
+      cancelRowNumberAnimation(valueEl);
+      valueEl.textContent = formatNumber(value);
+    }
   }
   valueEl.dataset.motionValue = String(Number(value) || 0);
   row.dataset.motionValue = String(Number(value) || 0);
@@ -2699,6 +2804,10 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
     ? captureBreakdownMotion()
     : null;
   if (structureChanged) {
+    const retainedKeys = new Set(visibleRows.map((row) => row.key));
+    for (const [key, row] of existing) {
+      if (!retainedKeys.has(key)) cancelRowNumberAnimation(row.querySelector('.row-value'));
+    }
     const nodes = visibleRows.map((row) => existing.get(row.key) || rowTemplate(row));
     if (incompleteHint) {
       const hint = existingHint || document.createElement('p');
@@ -3052,8 +3161,52 @@ function limitProvidersForSubscriptions() {
 // kind says which shape is being recorded, so hiding the accounts only got in
 // the way of reaching them.
 function subscriptionAccountChoices() {
-  const visible = limitProvidersForSubscriptions()
-    .filter((provider) => provider?.provider && provider.status !== 'notConfigured');
+  const observed = limitProvidersForSubscriptions()
+    .filter((provider) => !limitProviderPresentationApi.isWorkbuddyPlaceholder(provider))
+    .map((provider) => ({ ...provider }));
+  const known = [...observed];
+  // Managed identities remain selectable before a first successful quota read.
+  for (const account of state.settings?.workbuddyManagedAccounts || []) {
+    if (!account.accountKey) continue;
+    const existing = known.find((provider) => provider.provider === 'workbuddy' && provider.accountKey === account.accountKey);
+    if (existing) {
+      if (!existing.accountName) existing.accountName = account.accountName;
+      if (!existing.accountEmail) existing.accountEmail = account.accountEmail;
+    } else {
+      known.push({ provider: 'workbuddy', status: 'notConfigured', accountKey: account.accountKey,
+        accountName: account.accountName, accountEmail: account.accountEmail, windows: [] });
+    }
+  }
+  const saved = state.settings?.subscriptions || [];
+  // A stored binding also names an account while a device or credential is gone.
+  for (const subscription of saved) {
+    if (!subscription.provider || !subscription.binding) continue;
+    const binding = subscription.binding;
+    const account = { provider: subscription.provider, status: 'notConfigured', windows: [],
+      accountKey: binding.accountKey || '', accountEmail: binding.accountEmail || '', accountName: binding.profileName || '' };
+    // Token/cookie-based providers heal rotated keys against the observed pool
+    // before a saved-only virtual row can claim the obsolete exact key.
+    const healed = subscription.provider === 'workbuddy' ? null
+      : subscriptionApi.matchProviderAccount(subscription, observed);
+    const existing = healed || known.find((provider) => {
+      if (provider.provider !== account.provider) return false;
+      if (account.accountKey) return accountIdentityApi.accountKeyFamily(provider).has(account.accountKey);
+      if (account.accountEmail) return String(provider.accountEmail || provider.email || '').toLowerCase() === account.accountEmail.toLowerCase();
+      if (account.accountName) return provider.accountName === account.accountName;
+      return !provider.accountKey && !provider.accountEmail && !provider.email && !provider.accountName;
+    });
+    if (existing) {
+      if (!existing.accountName) existing.accountName = account.accountName;
+      if (!existing.accountEmail) existing.accountEmail = account.accountEmail;
+    } else known.push(account);
+  }
+  const visible = known.filter((provider) => {
+    if (!provider?.provider) return false;
+    if (provider.status === 'ok') return true;
+    if (provider.accountKey || provider.accountEmail || provider.email || provider.accountName) return true;
+    return saved.some((subscription) => subscription.provider === provider.provider && subscription.binding
+      && !subscription.binding.accountKey && !subscription.binding.accountEmail && !subscription.binding.profileName);
+  });
   return visible.map((provider, index) => ({
     provider,
     value: subscriptionAccountValue(provider),
@@ -3064,13 +3217,12 @@ function subscriptionAccountChoices() {
   }));
 }
 
-// The picker's value for one choice, which is only ever compared against another
-// choice from the same freshly built list: distinct per account, stable for one
-// record. It carries the address as well, so the two accounts a provider reports
-// by address alone are two choices rather than one — while "is this the same
-// account?" stays with accountIdentity.sameAccount(), where the matcher's rule
-// lives.
+// A known key stays stable through renamed profiles, changed email metadata and
+// failed quota reads. Address-only accounts retain the legacy disambiguation.
 function subscriptionAccountValue(provider) {
+  const id = String(provider?.provider || '').trim().toLowerCase();
+  const key = String(provider?.accountKey || '').trim();
+  if (key) return [id, key].join('\0');
   return [
     String(provider?.provider || '').trim().toLowerCase(),
     String(provider?.accountKey || '').trim(),
@@ -3100,7 +3252,7 @@ function subscriptionSelectedAccount() {
 // replaced the old one.
 function subscriptionForAccount(list, providerId, account, excludeId) {
   if (!account) return null;
-  const accounts = limitProvidersForSubscriptions();
+  const accounts = subscriptionAccountChoices().map((choice) => choice.provider);
   return list.find((entry) => {
     if (entry.id === excludeId || entry.provider !== providerId) return false;
     const bound = subscriptionApi.matchProviderAccount(entry, accounts);
@@ -3250,7 +3402,7 @@ function renderSubscriptionRows() {
     return;
   }
 
-  const providers = limitProvidersForSubscriptions();
+  const providers = subscriptionAccountChoices().map((choice) => choice.provider);
   for (const subscription of list) {
     const account = subscriptionApi.matchProviderAccount(subscription, providers);
     const row = document.createElement('div');
@@ -3896,7 +4048,7 @@ function beginSubscriptionEdit(id) {
   }
   state.subscriptionEditingId = id;
 
-  const account = subscriptionApi.matchProviderAccount(subscription, limitProvidersForSubscriptions());
+  const account = subscriptionApi.matchProviderAccount(subscription, subscriptionAccountChoices().map((choice) => choice.provider));
   if (els.subscriptionProviderInput) els.subscriptionProviderInput.value = subscription.provider;
   renderSubscriptionPickers();
   if (account && els.subscriptionAccountInput) {
@@ -4065,7 +4217,7 @@ function limitDetailTooltipShouldHoldRender() {
 }
 
 function sessionTooltipShouldHoldRender() {
-  return Boolean(document.querySelector('.home-session-row .is-hover-reading, .home-session-meta .limit-detail-tooltip-wrap:hover, .home-session-meta .limit-detail-tooltip-wrap:focus-within, .row-context.limit-detail-tooltip-wrap:hover, .row-context.limit-detail-tooltip-wrap:focus-within, .row-label .limit-detail-tooltip-wrap:hover, .row-label .limit-detail-tooltip-wrap:focus-within, .session-group-run .is-hover-reading, .session-group-run:focus-within, .session-group-run .limit-detail-tooltip-wrap:hover, .session-group-run .limit-detail-tooltip-wrap:focus-within, .detail-ex-title.limit-detail-tooltip-wrap:hover, .detail-ex-title.limit-detail-tooltip-wrap:focus-within'));
+  return Boolean(document.querySelector('.home-session-row .is-hover-reading, .home-session-meta .limit-detail-tooltip-wrap:hover, .home-session-meta .limit-detail-tooltip-wrap:focus-within, .row-context.limit-detail-tooltip-wrap:hover, .row-context.limit-detail-tooltip-wrap:focus-within, .row-label .limit-detail-tooltip-wrap:hover, .row-label .limit-detail-tooltip-wrap:focus-within, .session-group-run .is-hover-reading, .session-group-run:focus-within, .session-group-run .limit-detail-tooltip-wrap:hover, .session-group-run .limit-detail-tooltip-wrap:focus-within, .detail-ex-title.is-hover-reading, .detail-heading.is-hover-reading, .detail-ex-title.limit-detail-tooltip-wrap:hover, .detail-ex-title.limit-detail-tooltip-wrap:focus-within'));
 }
 
 function flushPendingLimitDetailTooltipRender() {
@@ -4172,6 +4324,9 @@ const limitWindowsView = window.TokenMonitorLimitWindowsView.createLimitWindowsV
   currencyApi,
   formatCost,
   subscriptions: () => state.settings?.subscriptions,
+  // The quota group uses the complete observed pool, including non-reporting
+  // identities. Saved-only bindings stay in the form choices; the stable-key
+  // matcher refuses to heal their tooltips onto another observed account.
   subscriptionAccounts: () => limitProvidersForSubscriptions(),
   monthClientCosts: () => state.stats?.periods?.month?.clientCosts,
   resetForecast: () => ({ busy: state.codexResetForecastBusy, forecast: state.codexResetForecast })
@@ -4435,6 +4590,7 @@ function renderLimits() {
       state.settings?.showToolIcons !== false,
       state.settings?.claudePrepaidBalanceEnabled !== false,
       state.settings?.codexResetForecastEnabled === true,
+      state.settings?.workbuddyQuotaTotalEnabled === true,
       state.settings?.showCodexAdditionalLimits !== false,
       state.settings?.limitProviderHiddenItems || {},
       state.settings?.currency || '',
@@ -4697,14 +4853,93 @@ async function openSessionDetail({ client, sessionId, sessionCost, title, return
     period: state.period, detail: null, returnTo, titleFollowsSession: titleFollowsSession === true };
   state.openSession = request;
   renderSessionDetail({ loading: true });
+  // Read before the request, not after: a stats push that lands while it is in
+  // flight has to stay unseen so catch-up re-reads, instead of being written
+  // off against a response that predates it.
+  const liveSignature = sessionDetailLiveSignature();
   try {
     const detail = await window.tokenMonitor.getSessionDetail({ client, sessionId, period: request.period, sessionCost });
     if (state.openSession === request) {
       request.detail = detail;
+      request.liveSignature = liveSignature;
       applySessionDetailResult(request, { detail });
+      // The final push may have arrived while detail was still null. Use the
+      // existing guards now; a held/hidden page catches up on leave/visibility.
+      if (detail?.found === true && !detail.error) void refreshOpenSessionDetail();
     }
   } catch (_) {
     applySessionDetailResult(request, { error: true });
+  }
+}
+
+function sessionLiveStatsEntry(request) {
+  if (!request) return null;
+  const periodKey = request.period || state.period;
+  return request.client === 'reasonix'
+    ? state.stats?.nativeSessions?.[periodKey]?.[request.sessionId] || null
+    : state.stats?.periods?.[periodKey]?.sessions?.[`${request.client}:${request.sessionId}`] || null;
+}
+
+function sessionLiveCost(entry, client) {
+  return client === 'reasonix' ? Number(entry?.reportedCostUsd || 0) : Number(entry?.costUsd || 0);
+}
+
+function sessionDetailLiveSignature() {
+  const entry = sessionLiveStatsEntry(state.openSession);
+  if (!entry) return '';
+  return JSON.stringify([
+    Number(entry.totalTokens) || 0,
+    Number(entry.costUsd) || 0,
+    Number(entry.reportedCostUsd) || 0
+  ]);
+}
+
+// The Details page is a point-in-time reading of a transcript: the reader runs
+// once per click, while the session keeps accruing usage through `stats:push`
+// and the refresh timer. Without a re-read, someone who opens a session mid-run
+// watches every other surface move while this one freezes until it is reopened.
+// Re-read only when the reported usage actually changed, and never mid-hover: a
+// rebuild replaces every row node, which would kill a tooltip or focus the
+// reader is using. The next tick picks it up once the hover ends.
+async function refreshOpenSessionDetail() {
+  const request = state.openSession;
+  if (request?.kind !== 'session' || !request.detail || request.detailLiveBusy) return;
+  if (visibleStatsSurface() !== 'main' || sessionTooltipShouldHoldRender()) return;
+  // Paint a held result once, then check whether usage advanced during its read.
+  // An unchanged signature still avoids another transcript read.
+  if (request.detailRenderPending) {
+    request.detailRenderPending = false;
+    renderSessionDetail({ detail: request.detail, preserveScroll: true });
+  }
+  const signature = sessionDetailLiveSignature();
+  if (!signature || signature === request.liveSignature) return;
+  const sessionCost = sessionLiveCost(sessionLiveStatsEntry(request), request.client);
+  request.detailLiveBusy = true;
+  let readSucceeded = false;
+  try {
+    const detail = await window.tokenMonitor.getSessionDetail({
+      client: request.client, sessionId: request.sessionId, period: request.period, sessionCost
+    });
+    if (state.openSession !== request) return;
+    // Readers resolve filesystem failures as payloads rather than rejecting.
+    // Keep the last good snapshot and signature so the next tick can retry.
+    if (!detail || detail.found !== true || detail.error) return;
+    request.sessionCost = sessionCost;
+    request.detail = detail;
+    request.liveSignature = signature;
+    readSucceeded = true;
+    // The reader can start a hover while the read is in flight, so the hold is
+    // rechecked here rather than trusted from the call site.
+    if (sessionTooltipShouldHoldRender()) { request.detailRenderPending = true; return; }
+    renderSessionDetail({ detail, preserveScroll: true });
+  } catch (_) {
+    // Keep the last good reading; the next stats tick tries again.
+  } finally {
+    request.detailLiveBusy = false;
+    // Leave can run while busy. A successful read checks for a final push via
+    // the same visibility/hold/signature guards; failures wait for a later retry.
+    if (readSucceeded && state.openSession === request
+      && sessionDetailLiveSignature() !== request.liveSignature) void refreshOpenSessionDetail();
   }
 }
 
@@ -4732,13 +4967,23 @@ function sessionDetailBack() {
   closeSessionDetail();
 }
 
-function renderSessionDetail({ detail, loading, error } = {}) {
+function renderSessionDetail({ detail, loading, error, preserveScroll = false } = {}) {
   els.breakdown.classList.add('hidden');
   els.sessionDetail.classList.remove('hidden');
   els.sessionDetailHead.classList.remove('hidden');
   const head = els.sessionDetailHead;       // static layer — rows scroll independently below it
   const container = els.sessionDetail;
   container.classList.remove('session-group-list');
+  // Anchor the row being read: new content can grow above or below it, and
+  // token sorting can reorder exchanges without changing the total height.
+  const previousScroll = preserveScroll ? captureSessionDetailScroll(container) : null;
+  // A reader who opened an exchange keeps it open; a rebuild that collapsed it
+  // would look like the page had reset itself under them.
+  const expandedKeys = preserveScroll
+    ? new Set([...container.children]
+      .filter((node) => node.classList.contains('expanded'))
+      .map((node) => node.dataset.exchangeKey))
+    : null;
   head.replaceChildren();
   container.replaceChildren();
 
@@ -4767,7 +5012,38 @@ function renderSessionDetail({ detail, loading, error } = {}) {
   head.append(sort);
 
   const max = Math.max(1, ...rows.map((row) => row.value));
-  for (const row of rows) container.append(exchangeNode(row, max));
+  for (const row of rows) container.append(exchangeNode(row, max, expandedKeys?.has(row.key) === true));
+  if (previousScroll) restoreSessionDetailScroll(container, previousScroll);
+}
+
+function captureSessionDetailScroll(container) {
+  const top = container.scrollTop;
+  if (top === 0) return { top };
+  const viewportTop = container.getBoundingClientRect().top + container.clientTop;
+  for (const exchange of container.children) {
+    if (!exchange.dataset.exchangeKey || exchange.getBoundingClientRect().bottom <= viewportTop) continue;
+    const candidates = [exchange.querySelector('.detail-ex-head')];
+    if (exchange.classList.contains('expanded')) candidates.push(...exchange.querySelectorAll('.detail-turn'));
+    const node = candidates.find(candidate => candidate && candidate.getBoundingClientRect().bottom > viewportTop);
+    if (node) return {
+      top, exchangeKey: exchange.dataset.exchangeKey, turnKey: node.dataset.key,
+      offset: node.getBoundingClientRect().top - viewportTop
+    };
+  }
+  return { top };
+}
+
+function restoreSessionDetailScroll(container, anchor) {
+  const exchange = [...container.children].find(node => node.dataset.exchangeKey === anchor.exchangeKey);
+  const node = exchange && (anchor.turnKey
+    ? [...exchange.querySelectorAll('.detail-turn')].find(turn => turn.dataset.key === anchor.turnKey)
+    : exchange.querySelector('.detail-ex-head'));
+  if (node && anchor.top > 0) {
+    const viewportTop = container.getBoundingClientRect().top + container.clientTop;
+    container.scrollTop += node.getBoundingClientRect().top - viewportTop - anchor.offset;
+  } else {
+    container.scrollTop = anchor.top;
+  }
 }
 
 function sessionDetailTitle() {
@@ -4982,7 +5258,7 @@ function detailNote(text) {
   return note;
 }
 
-function exchangeNode(row, max) {
+function exchangeNode(row, max, expanded = false) {
   const wrap = document.createElement('div');
   wrap.className = 'detail-exchange';
   wrap.innerHTML = '<div class="detail-ex-head"><span class="detail-chev">▸</span>'
@@ -5013,10 +5289,17 @@ function exchangeNode(row, max) {
   const turnsEl = wrap.querySelector('.detail-turns');
   for (const turn of row.turns) turnsEl.append(turnNode(turn));
 
-  const head = wrap.querySelector('.detail-ex-head');
-  head.addEventListener('click', () => {
-    const collapsed = turnsEl.classList.toggle('hidden');
-    wrap.querySelector('.detail-chev').textContent = collapsed ? '▸' : '▾';
+  // Row keys are assigned in transcript order before display sorting, so
+  // equal or missing timestamps do not reopen or anchor a different exchange.
+  wrap.dataset.exchangeKey = row.key;
+  const setExpanded = (open) => {
+    turnsEl.classList.toggle('hidden', !open);
+    wrap.classList.toggle('expanded', open);
+    wrap.querySelector('.detail-chev').textContent = open ? '▾' : '▸';
+  };
+  setExpanded(expanded);
+  wrap.querySelector('.detail-ex-head').addEventListener('click', () => {
+    setExpanded(turnsEl.classList.contains('hidden'));
   });
   return wrap;
 }
@@ -5024,6 +5307,7 @@ function exchangeNode(row, max) {
 function turnNode(turn) {
   const el = document.createElement('div');
   el.className = 'detail-turn';
+  el.dataset.key = turn.key;
   const tk = turn.tokens || {};
   // "cache" folds cache reads + cache writes (Claude's cache_creation) into one bucket so the
   // in/out/cache breakdown sums to the turn total; reason is an informational subset of out.
@@ -5745,7 +6029,7 @@ function homeLimitRows() {
   return homeOverviewApi.homeLimitAccountsForProviders({
     // Hidden rows go before the compact pick, so Antigravity's tightest window
     // per group is chosen among the ones the user still shows.
-    providers: (state.stats?.limits?.providers || []).map((provider) => ({
+    providers: limitWindowsView.collapseWorkbuddyAccounts(state.stats?.limits?.providers || []).map((provider) => ({
       ...provider,
       windows: limitProviderPresentationApi.limitProviderCompactWindows(
         provider,
@@ -6700,7 +6984,16 @@ function sessionStatsForDisplay(stats) {
 
 function setRendererSettings(next) {
   const titlesChanged = (state.settings?.sessionTitlesEnabled !== false) !== (next.sessionTitlesEnabled !== false);
+  const animationChanged = tokenNumberAnimationApi.normalize(state.settings?.tokenNumberAnimation)
+    !== tokenNumberAnimationApi.normalize(next.tokenNumberAnimation);
   state.settings = next;
+  if (animationChanged) {
+    cancelNumberAnimation();
+    settleRowNumberAnimations();
+    numberAnimValue = state.currentTotal;
+    els.totalTokens.textContent = formatNumber(state.currentTotal);
+    updateTotalCompact(state.currentTotal);
+  }
   if (titlesChanged) {
     if (next.sessionTitlesEnabled === false) state.stats = sessionStatsForDisplay(state.stats);
     // Main may have returned a titleless map while disabled. Pull it again
@@ -6772,15 +7065,17 @@ function render() {
     updateTotalCompact(nextTotal);
     state.suppressInitialNumberAnimation = false;
   } else if (totalChanged) {
-    // Keep the compact chip visible through the count-up and lock the font to the
-    // widest endpoint first (a downward roll starts wider than it settles), so the
-    // number never vanishes, clips, or resizes mid-roll. Re-fit on completion so a
-    // window resize during the animation, or a downward settle, still ends correct.
     const animationFrom = numberAnimHandle ? numberAnimValue : state.currentTotal;
-    const widest = formatNumber(nextTotal).length >= formatNumber(animationFrom).length ? nextTotal : animationFrom;
-    els.totalTokens.textContent = formatNumber(widest);
-    updateTotalCompact(nextTotal);
-    animateTotalNumber(els.totalTokens, animationFrom, nextTotal, state.periodMotionActive ? 800 : 1000);
+    // Count-up keeps a stable font throughout its intermediate values. Digit
+    // roll measures the old layout before fitting its destination, so geometry
+    // and font scaling finish together without a second jump on cleanup.
+    if (tokenNumberAnimationApi.normalize(state.settings?.tokenNumberAnimation) !== 'roll') {
+      const widest = formatNumber(nextTotal).length >= formatNumber(animationFrom).length ? nextTotal : animationFrom;
+      els.totalTokens.textContent = formatNumber(widest);
+      updateTotalCompact(nextTotal);
+    }
+    animateTotalNumber(els.totalTokens, animationFrom, nextTotal, state.periodMotionActive ? 800 : 1000,
+      { synchronized: state.periodMotionActive });
     pulseLiveDot();
   } else if (!headlineNumberIsAnimatingTo(nextTotal)) {
     cancelNumberAnimation();
@@ -6852,6 +7147,7 @@ function render() {
       state.openSession.renderOptions = null;
       renderSessionDetail(options);
     }
+    void refreshOpenSessionDetail();
   } else {
     els.homePanel.classList.add('hidden');
     els.limitsPanel.classList.add('hidden');
@@ -7955,6 +8251,7 @@ function appearancePatchFromControls() {
     windowsBackdrop: windowsGlassApi.normalizeWindowsBackdropMode(els.windowsBackdropInput?.value),
     macBackdrop: macBackdropApi.normalizeMacBackdropMode(els.macBackdropInput?.value),
     reduceMotion: els.reduceMotionInputs?.find((input) => input.checked)?.value || 'system',
+    tokenNumberAnimation: tokenNumberAnimationApi.normalize(els.tokenNumberAnimationInput?.value),
     showLiveDot: Boolean(els.liveDotInput.checked),
     showToolIcons: Boolean(els.toolIconsInput.checked),
     titleIconOnly: Boolean(els.titleIconInput.checked),
@@ -8883,6 +9180,9 @@ function syncSettingsForm() {
   els.liveDotInput.checked = state.settings.showLiveDot !== false;
   els.toolIconsInput.checked = state.settings.showToolIcons !== false;
   els.titleIconInput.checked = state.settings.titleIconOnly === true;
+  if (els.tokenNumberAnimationInput) {
+    els.tokenNumberAnimationInput.value = tokenNumberAnimationApi.normalize(state.settings.tokenNumberAnimation);
+  }
   els.showCompactTotalTokensInput.checked = state.settings.showCompactTotalTokens === true;
   els.showLiveTokenRateInput.checked = state.settings.showLiveTokenRate === true;
   if (els.liveTokenRateScopeInput) {
@@ -8942,6 +9242,7 @@ function syncSettingsForm() {
     if (limitProviderAccountGroup(form.id)) renderExternalProviderStatus(form.id);
   }
   renderAntigravityStatus();
+  renderWorkbuddyStatus();
   renderMimoStatus();
   renderCopilotStatus();
   renderViewPreferences();
@@ -11457,6 +11758,12 @@ const LIMIT_PROVIDER_SETTINGS = {
     descKey: 'settings.limits.codexResetForecastDesc',
     defaultValue: false
   }],
+  workbuddy: [{
+    key: 'workbuddyQuotaTotalEnabled',
+    titleKey: 'settings.workbuddy.showQuotaTotal',
+    descKey: 'settings.workbuddy.showQuotaTotalDesc',
+    defaultValue: false
+  }],
   opencode: [{
     key: 'opencodeLocalLimitsEnabled',
     titleKey: 'settings.limits.opencodeLocalLimits',
@@ -12172,7 +12479,7 @@ for (const tab of document.querySelectorAll('.tab')) {
     state.periodMotionActive = true;
     render();
     state.periodMotionActive = false;
-    animateBreakdownFrom(snapshot, { duration: 800 });
+    animateBreakdownFrom(snapshot, { duration: periodBreakdownMotionDuration(), synchronized: true });
   });
 }
 
@@ -12181,6 +12488,7 @@ for (const button of els.monthPeriodMenu?.querySelectorAll('[data-fixed-period]'
     event.stopPropagation();
     const selection = fixedPeriodRangesApi.normalizeMonthMode(button.dataset.fixedPeriod);
     setPeriodMenuOpen(false, { restoreFocus: true });
+    const snapshot = captureBreakdownMotion();
     const changed = setPeriod(selection);
     state.settings.periodMonthMode = selection;
     syncPeriodTabs();
@@ -12190,6 +12498,7 @@ for (const button of els.monthPeriodMenu?.querySelectorAll('[data-fixed-period]'
       state.periodMotionActive = true;
       render();
       state.periodMotionActive = false;
+      animateBreakdownFrom(snapshot, { duration: periodBreakdownMotionDuration(), synchronized: true });
     }
     await saveSettings({ periodMonthMode: selection });
   });
@@ -12237,6 +12546,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
+els.breakdown.addEventListener('scroll', settleOffscreenBreakdownNumbers, { passive: true });
 els.breakdown.addEventListener('click', (event) => {
   if (state.breakdown !== 'session') return;
   const rowEl = event.target.closest('.row');
@@ -12253,7 +12563,7 @@ els.breakdown.addEventListener('click', (event) => {
   }
   const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
   const client = rowEl.dataset.client || '';
-  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy') return;
+  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy' && client !== 'pi') return;
   if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
   const match = key.match(/^session:([^:]+):(.+)$/);
   if (!match) return;
@@ -12702,6 +13012,7 @@ els.toolIconsInput.addEventListener('change', async () => {
   await saveAppearanceFromControls();
 });
 els.titleIconInput.addEventListener('change', saveAppearanceFromControls);
+els.tokenNumberAnimationInput?.addEventListener('change', saveAppearanceFromControls);
 els.showCompactTotalTokensInput.addEventListener('change', async () => {
   await saveAppearanceFromControls();
 });
@@ -13134,6 +13445,7 @@ function renderStatsUpdate() {
   if (!isSettingsSurfaceVisible()) return;
   renderCodexAccounts();
   renderMimoStatus();
+  renderWorkbuddyStatus();
   renderSettingsSummaries();
   renderLimitProviderCheckboxes();
   renderToolPreferences();
@@ -14791,6 +15103,239 @@ function localProviderStatuses(name) {
     ? localProviders
     : (state.stats?.limits?.providers || []);
   return providers.filter((provider) => provider.provider === name);
+}
+
+function workbuddyAccountError(code, fallback = 'loginFailed') {
+  const keys = {
+    TIMEOUT: 'loginTimeout',
+    STATE_MISMATCH: 'loginStateMismatch',
+    INVALID_STATE: 'loginStateMismatch',
+    INVALID_LOGIN_URL: 'loginStateMismatch',
+    CONTEXT_CHANGED: 'loginStateMismatch',
+    credentialStorageUnavailable: 'credentialStorageUnavailable',
+    PERSISTENCE_FAILED: 'credentialStorageUnavailable',
+    ROLLBACK_FAILED: 'credentialStorageUnavailable',
+    loginInProgress: 'loginInProgress'
+  };
+  return t(`settings.workbuddy.${Object.hasOwn(keys, code) ? keys[code] : fallback}`);
+}
+
+function applyWorkbuddyAccounts(accounts) {
+  if (!state.settings || !Array.isArray(accounts)) return;
+  state.workbuddyAccountsRevision = (state.workbuddyAccountsRevision || 0) + 1;
+  state.settings.workbuddyManagedAccounts = accounts;
+  renderWorkbuddyStatus();
+  renderSettingsSummaries();
+  renderSubscriptionSettings();
+}
+
+async function mutateWorkbuddyAccount(id, operation, enabled) {
+  if (state.workbuddyMutationBusy || state.workbuddySignInBusy || state.workbuddyCancelBusy) return;
+  state.workbuddyMutationBusy = true;
+  state.workbuddyAccountError = '';
+  renderWorkbuddyStatus();
+  try {
+    const api = window.tokenMonitor.workbuddy;
+    const result = operation === 'remove'
+      ? await api.removeAccount(id)
+      : await api.setAccountEnabled(id, enabled);
+    if (!result?.ok) {
+      state.workbuddyAccountError = workbuddyAccountError(result?.errorCode,
+        operation === 'remove' ? 'removeFailed' : 'toggleFailed');
+    } else {
+      applyWorkbuddyAccounts(result.accounts);
+      refreshStats({ force: true }).catch(() => {});
+    }
+  } catch (_) {
+    state.workbuddyAccountError = workbuddyAccountError('', operation === 'remove' ? 'removeFailed' : 'toggleFailed');
+  } finally {
+    state.workbuddyMutationBusy = false;
+    renderWorkbuddyStatus();
+  }
+}
+
+function finishWorkbuddyLogin(attempt, result) {
+  if (state.workbuddyLoginAttempt !== attempt) return;
+  if (state.workbuddyCancelBusy) {
+    state.workbuddyPendingLoginResult = { attempt, result };
+    return;
+  }
+  state.workbuddySignInBusy = false;
+  state.workbuddyAccountError = '';
+  if (result?.ok) {
+    applyWorkbuddyAccounts(result.accounts);
+    state.workbuddyLoginStatusKey = '';
+    refreshStats({ force: true }).catch(() => {});
+  } else if (['CANCELED', 'CANCELLED'].includes(result?.errorCode)) {
+    state.workbuddyLoginStatusKey = 'loginCancelled';
+  } else {
+    state.workbuddyLoginStatusKey = '';
+    state.workbuddyAccountError = workbuddyAccountError(result?.errorCode);
+  }
+  renderWorkbuddyStatus();
+}
+
+async function startWorkbuddyLogin(realm) {
+  if (!['cn', 'ai'].includes(realm) || state.workbuddySignInBusy || state.workbuddyCancelBusy || state.workbuddyMutationBusy) return;
+  const attempt = (state.workbuddyLoginAttempt || 0) + 1;
+  state.workbuddyLoginAttempt = attempt;
+  state.workbuddySignInBusy = true;
+  state.workbuddyPendingLoginResult = null;
+  state.workbuddyAccountError = '';
+  state.workbuddyLoginStatusKey = 'loginStatus';
+  renderWorkbuddyStatus();
+  let result;
+  try {
+    result = await window.tokenMonitor.workbuddy.addAccount(realm);
+  } catch (_) {
+    result = { ok: false };
+  }
+  finishWorkbuddyLogin(attempt, result);
+}
+
+async function cancelWorkbuddyLogin() {
+  if (!state.workbuddySignInBusy || state.workbuddyCancelBusy) return;
+  state.workbuddyCancelBusy = true;
+  state.workbuddyAccountError = '';
+  renderWorkbuddyStatus();
+  let cancelled = false;
+  try {
+    const result = await window.tokenMonitor.workbuddy.cancelLogin();
+    cancelled = result === true || result?.ok === true;
+  } catch (_) {}
+  state.workbuddyCancelBusy = false;
+  if (cancelled) {
+    // A cancelled IPC promise may settle later, including after the next login.
+    state.workbuddyLoginAttempt = (state.workbuddyLoginAttempt || 0) + 1;
+    state.workbuddySignInBusy = false;
+    state.workbuddyPendingLoginResult = null;
+    state.workbuddyLoginStatusKey = 'loginCancelled';
+  } else if (state.workbuddyPendingLoginResult) {
+    const pending = state.workbuddyPendingLoginResult;
+    state.workbuddyPendingLoginResult = null;
+    finishWorkbuddyLogin(pending.attempt, pending.result);
+  } else {
+    state.workbuddyAccountError = workbuddyAccountError('', 'cancelFailed');
+  }
+  renderWorkbuddyStatus();
+}
+
+function renderWorkbuddyStatus() {
+  const list = document.getElementById('workbuddyAccountList');
+  if (!list || !state.settings) return;
+  const accounts = Array.isArray(state.settings.workbuddyManagedAccounts) ? state.settings.workbuddyManagedAccounts : [];
+  const busy = Boolean(state.workbuddySignInBusy || state.workbuddyCancelBusy || state.workbuddyMutationBusy);
+  accountShellApi.render({
+    status: document.getElementById('workbuddyAccountStatus'),
+    statusText: accounts.length
+      ? t('settings.workbuddy.connected', { linked: accounts.filter((a) => a.enabled !== false).length, total: accounts.length })
+      : t('settings.workbuddy.notConfigured'),
+    progress: document.getElementById('workbuddyLoginStatus'),
+    progressText: state.workbuddyCancelBusy
+      ? t('settings.workbuddy.cancelling')
+      : state.workbuddyLoginStatusKey ? t(`settings.workbuddy.${state.workbuddyLoginStatusKey}`) : '',
+    error: document.getElementById('workbuddyAccountErrorMessage'),
+    errorText: state.workbuddyAccountError
+  });
+  for (const [id, key] of [['workbuddyAddCnAccountButton', 'addCnAccount'], ['workbuddyAddAiAccountButton', 'addAiAccount']]) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.disabled = busy;
+    button.textContent = t(`settings.workbuddy.${key}`);
+  }
+  const cancel = document.getElementById('workbuddyCancelLoginButton');
+  if (cancel) {
+    cancel.classList.toggle('hidden', !state.workbuddySignInBusy && !state.workbuddyCancelBusy);
+    cancel.disabled = Boolean(state.workbuddyCancelBusy);
+  }
+  list.replaceChildren();
+  if (!accounts.length) {
+    const empty = document.createElement('p');
+    empty.className = 'settings-note';
+    empty.textContent = t('settings.workbuddy.empty');
+    list.append(empty);
+  }
+  const providers = localProviderStatuses('workbuddy');
+  accounts.forEach((account, index) => {
+    const name = accountIdentityApi.accountTitleLabel({ provider: 'workbuddy', ...account }, accounts, {
+      maskEmail: state.settings.maskLimitAccountEmails === true, index
+    }) || t('settings.workbuddy.accountFallback', { number: index + 1 });
+    const row = document.createElement('div');
+    row.className = 'managed-account-row';
+    row.classList.toggle('disabled', account.enabled === false);
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'managed-account-checkbox';
+    input.checked = account.enabled !== false;
+    input.disabled = busy;
+    input.setAttribute('aria-label', t('settings.workbuddy.toggleAccount', { account: name }));
+    input.addEventListener('change', () => mutateWorkbuddyAccount(account.id, 'toggle', input.checked));
+    const main = document.createElement('div');
+    main.className = 'managed-account-main';
+    const title = document.createElement('div');
+    title.className = 'managed-account-email';
+    title.textContent = name;
+    title.title = name;
+    const meta = document.createElement('div');
+    meta.className = 'workbuddy-account-meta';
+    meta.textContent = t(account.realm === 'ai' ? 'settings.workbuddy.realmAi' : 'settings.workbuddy.realmCn');
+    main.append(title, meta);
+    const right = document.createElement('span');
+    right.className = 'managed-account-right';
+    const info = document.createElement('span');
+    info.className = 'managed-account-info';
+    // Nicknames, realm labels and email addresses never redirect a quota lookup.
+    const provider = account.accountKey
+      ? providers.find((candidate) => candidate.accountKey === account.accountKey)
+      : null;
+    info.textContent = account.enabled === false ? t('settings.workbuddy.disabled')
+      : provider ? translatedLimitProviderTag(limitProviderPresentationApi.limitProviderStatusLabel(provider))
+        : t('settings.workbuddy.notChecked');
+    info.title = info.textContent;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'managed-account-remove';
+    remove.textContent = '✕';
+    remove.title = t('settings.workbuddy.remove');
+    remove.setAttribute('aria-label', t('settings.workbuddy.removeConfirm', { account: name }));
+    remove.disabled = busy;
+    let armed = false;
+    remove.addEventListener('click', () => {
+      if (busy) return;
+      if (!armed) {
+        armed = true;
+        remove.classList.add('confirming');
+        remove.textContent = '✓';
+        remove.title = t('settings.workbuddy.removeConfirm', { account: name });
+        return;
+      }
+      return mutateWorkbuddyAccount(account.id, 'remove');
+    });
+    right.append(info, remove);
+    row.append(input, main, right);
+    list.append(row);
+  });
+}
+
+function initWorkbuddyAccountSettings() {
+  const api = window.tokenMonitor.workbuddy;
+  const toggle = document.getElementById('workbuddySettingsToggle');
+  if (!api || !toggle) return;
+  toggle.addEventListener('click', () => setAccountGroupExpanded('workbuddy', !state.workbuddyAccountExpanded, 'workbuddyAccountExpanded'));
+  setAccountGroupExpanded('workbuddy', false, 'workbuddyAccountExpanded');
+  renderWorkbuddyStatus();
+  api.onAccounts(applyWorkbuddyAccounts);
+  const revision = state.workbuddyAccountsRevision || 0;
+  api.accounts().then((accounts) => {
+    if ((state.workbuddyAccountsRevision || 0) === revision) applyWorkbuddyAccounts(accounts);
+  }).catch(() => {
+    if ((state.workbuddyAccountsRevision || 0) !== revision) return;
+    state.workbuddyAccountError = workbuddyAccountError('', 'accountsFailed');
+    renderWorkbuddyStatus();
+  });
+  document.getElementById('workbuddyAddCnAccountButton')?.addEventListener('click', () => startWorkbuddyLogin('cn'));
+  document.getElementById('workbuddyAddAiAccountButton')?.addEventListener('click', () => startWorkbuddyLogin('ai'));
+  document.getElementById('workbuddyCancelLoginButton')?.addEventListener('click', cancelWorkbuddyLogin);
 }
 
 function renderAntigravityStatus() {
@@ -17239,6 +17784,8 @@ function setupCursorAccountUI() {
       });
     }
   }
+
+  initWorkbuddyAccountSettings();
 
   const antigravityToggle = document.getElementById('antigravitySettingsToggle');
   if (antigravityToggle && window.tokenMonitor.antigravity) {

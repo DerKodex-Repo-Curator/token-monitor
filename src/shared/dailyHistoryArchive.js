@@ -1065,7 +1065,19 @@ function retainDailyHistory(graphs, options = {}) {
     const latest = readDailyHistoryArchive({ ...options, fresh: true });
     next = capture(latest);
     if (archiveWriteEnabled(options) && !isDeepStrictEqual(latest, next)) {
-      writeDailyHistoryArchive(next, options);
+      try {
+        writeDailyHistoryArchive(next, options);
+      } catch (error) {
+        // A failed commit grants no new authority. Keep committed accounting,
+        // with in-memory watch locks until a later full scan can commit again.
+        const committed = normalizeDailyHistoryArchive(structuredClone(latest));
+        const scopes = Object.values(committed.sourceLedger?.scopes || {});
+        if (scopes.length) {
+          for (const scope of scopes) scope.blockNativeWatch = true;
+          error.retainedGraph = graphFromDailyHistoryArchive([], committed, { ...options, canonical: true });
+        }
+        throw error;
+      }
     }
   }
   return graphFromDailyHistoryArchive([], next, { ...options, canonical: true });

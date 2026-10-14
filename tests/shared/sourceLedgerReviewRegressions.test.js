@@ -15,6 +15,7 @@ const { applySourceDailyUsage } = require('../../src/shared/usage/sourceDailyUsa
 const { applySessionUsageArchive, isSessionUsageArchiveEvidence } = require('../../src/shared/usage/sessionUsageArchive');
 const { createSessionUsageArchiveStore } = require('../../src/shared/usage/sessionUsageArchiveStore');
 const { createUsageTransform } = require('../../src/shared/usage/usageTransform');
+const { captureArchivedClientUsage } = require('../../src/shared/usage/clientUsageArchive');
 
 const now = new Date(2026, 9, 13, 12);
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -187,4 +188,82 @@ test('a newer unknown registry observation revokes retained waiting in either ar
     assert.equal(session.liveActivity.state, 'unknown');
     assert.equal(sessionActivityState(session, clock), 'idle');
   }
+});
+
+test('full and cached source projection leave disabled legacy usage to its frozen client archive', async t => {
+  const f = fixture(t);
+  const released = { contributions: [{ date: day(now), clients: [{ client: 'claude', modelId: 'claude-model',
+    cost: 1, messages: 1, tokens: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 } }] }] };
+  fs.writeFileSync(f.options.dailyHistoryArchiveOptions.path, JSON.stringify(captureDailyHistoryArchive({}, released)));
+  const firstGraph = graph([row('A', 20)]);
+  firstGraph.sourceUsage.replacementClients.push('claude');
+  firstGraph.sourceUsage.scopes.push({ id: 'claude', clients: ['claude'], readStatus: 'complete', identityStatus: 'exact' });
+  let projection;
+  const before = await collectUsageOnce({ ...f.options, clients: 'claude,codex',
+    runTokscale: async () => ({ entries: [...native([row('A', 20)]).entries,
+      { client: 'claude', sessionId: 'old', model: 'claude-model', input: 100, cost: 1 }] }),
+    runGraph: async () => firstGraph, onSourceArchiveComputed: value => { projection = value; } });
+  assert.equal(before.allTime.totalTokens, 120);
+  assert.equal(projection.scopes.find(scope => scope.id === 'claude').mode, 'legacy');
+  const frozen = captureArchivedClientUsage({}, before, 'claude');
+  const transform = createUsageTransform({ store: {}, getSettings: () => ({ clients: 'codex', archivedClientUsage: frozen }) });
+  for (const includeHistory of [true, false]) {
+    const selected = await collectUsageOnce({ ...f.options, clients: 'codex', includeHistory,
+      sourceArchiveSnapshot: projection, now: new Date(now.getTime() + 1000),
+      runTokscale: async () => native([row('A', 20)]), runGraph: async () => graph([row('A', 20)], new Date(now.getTime() + 1000)) });
+    assert.equal(selected.allTime.totalTokens, 20, 'active projection excludes disabled Claude');
+    const visible = transform.project(selected, { version: 1, sessions: {} }, now);
+    assert.equal(visible.allTime.totalTokens, 120);
+    assert.equal(visible.allTime.clients.claude, 100);
+    assert.equal(visible.allTime.clients.codex, 20);
+  }
+});
+
+test('failed daily writes protect committed source usage through cached watch, restart and recovery', async t => {
+  const f = fixture(t);
+  let input = 45, partial = false, failWrite = false, projection;
+  const failures = [];
+  const options = { ...f.options,
+    runTokscale: async () => native([row('A', input)]),
+    runGraph: async () => {
+      const value = graph([row('A', input)], new Date(now.getTime() + 1000));
+      if (partial) value.sourceUsage.scopes[0].readStatus = 'partial';
+      return value;
+    }, onSourceArchiveComputed: value => { projection = value; },
+    onHistoryStatus: value => failures.push(value),
+    dailyHistoryArchiveOptions: { ...f.options.dailyHistoryArchiveOptions,
+      writeJsonAtomic: (file, value) => {
+        if (failWrite) throw Object.assign(new Error('read-only disk'), { code: 'EROFS' });
+        fs.writeFileSync(file, JSON.stringify(value));
+      } } };
+  assert.equal((await collectUsageOnce(options)).allTime.totalTokens, 45);
+  const committed = fs.readFileSync(f.options.dailyHistoryArchiveOptions.path);
+  input = 15; partial = true; failWrite = true;
+  const failed = await collectUsageOnce({ ...options, sourceArchiveSnapshot: projection });
+  assert.equal(failed.allTime.totalTokens, 45);
+  assert.equal(failed.history.summary.totalTokens, 45);
+  assert.deepEqual(failed.sessionArchiveSource.ownedClients, ['codex']);
+  assert.equal(projection.scopes[0].blockNativeWatch, true);
+  assert.deepEqual(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path), committed);
+  const cached = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection });
+  assert.equal(cached.allTime.totalTokens, 45);
+  const restarted = await collectUsageOnce({ ...options, sourceArchiveSnapshot: undefined });
+  assert.equal(restarted.allTime.totalTokens, 45);
+  assert.equal(restarted.history.summary.totalTokens, 45);
+  failWrite = false;
+  assert.equal((await collectUsageOnce(options)).allTime.totalTokens, 45);
+  partial = false;
+  options.runGraph = async () => graph([row('A', 15)], new Date(now.getTime() + 2000));
+  const lastCommitted = fs.readFileSync(f.options.dailyHistoryArchiveOptions.path);
+  failWrite = true;
+  const healthyButUncommitted = await collectUsageOnce(options);
+  assert.equal(healthyButUncommitted.allTime.totalTokens, 45);
+  assert.equal(healthyButUncommitted.history.summary.totalTokens, 45);
+  assert.deepEqual(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path), lastCommitted);
+  failWrite = false;
+  const recovered = await collectUsageOnce(options);
+  assert.equal(recovered.allTime.totalTokens, 15);
+  assert.equal(recovered.history.summary.totalTokens, 15);
+  assert.notEqual(projection.scopes[0].blockNativeWatch, true);
+  assert.ok(failures.some(value => value.failureCode === 'daily-history-archive-failed'));
 });
