@@ -658,12 +658,79 @@ for (const freshTokens of [20, 15]) {
       runTokscale: async () => report([event('A', 15, 'native')]) });
     for (const name of ['today', 'month', 'allTime']) {
       assert.equal(fresh[name].totalTokens, freshTokens, 'cached projection keeps fresh native counters');
-      assert.equal(fresh.usageIdentity?.periods?.[name], undefined, 'cached ledger grants no proof over a fresh native revision');
+      assert.deepEqual(fresh.usageIdentity.periods[name].events.map(e => e.id), [id('B')], 'proof certifies the fresh native revision');
     }
     const at = now.getTime();
     for (const records of [[fresh, peer], [syncPayload(fresh), syncPayload(peer)]]) {
       const aggregate = aggregateDevices(records, 600000, at);
       for (const name of ['today', 'month', 'allTime']) assert.equal(aggregate.periods[name].totalTokens, freshTokens + 15);
+    }
+  });
+}
+
+test('healthy History-disabled full ticks retain unchanged native proof across all periods and warm deltas', async t => {
+  const { aggregateDevices } = require('../../src/shared/usage');
+  const { syncPayload } = require('../../src/shared/syncPayload');
+  const options = base(t, { historyEnabled: true, includeHistory: true, dailyHistoryArchiveEnabled: true,
+    getSessionUsageArchive: () => ({ version: 1, sessions: {} }) });
+  options.dailyHistoryArchiveOptions = { path: path.join(options.homeDir, 'daily.json') };
+  let projection;
+  const original = [event('A', 15, 'mirror')];
+  await collectUsageOnce({ ...options, onSourceArchiveComputed: value => { projection = value; },
+    runTokscale: async () => report(original), runGraph: async () => graph(original, {}) });
+  let captured;
+  const fresh = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection,
+    onAnchorComputed: value => { captured = value; }, runTokscale: async () => report(original),
+    runGraph: () => { throw new Error('no interval graph'); } });
+  let scans = 0;
+  const warm = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection,
+    todayOnlyAnchor: anchorOf(captured), runTokscale: async input => {
+      scans++; assert.deepEqual(input.flags, ['--today']); return report(original);
+    }, runGraph: () => { throw new Error('no warm graph'); } });
+  assert.equal(scans, 1);
+  const peer = await collectUsageOnce({ ...base(t), deviceId: 'remote', runTokscale: async () => report([event('A', 15)]) });
+  for (const record of [fresh, warm]) {
+    for (const name of ['today', 'month', 'allTime']) assert.deepEqual(record.usageIdentity.periods[name].events.map(e => e.id), [id('A')]);
+    for (const pair of [[record, peer], [syncPayload(record), syncPayload(peer)]]) {
+      const result = aggregateDevices(pair, 600000, now.getTime());
+      for (const name of ['today', 'month', 'allTime']) assert.equal(result.periods[name].totalTokens, 15);
+    }
+  }
+});
+
+for (const mixed of [false, true]) {
+  test(`History-disabled full capture claims selected retained A alongside ${mixed ? 'fresh B' : 'empty native usage'}`, async t => {
+    const { aggregateDevices } = require('../../src/shared/usage');
+    const workerUsage = require('../../worker/src/shared/usage');
+    const { syncPayload } = require('../../src/shared/syncPayload');
+    const options = base(t, { historyEnabled: true, includeHistory: true, dailyHistoryArchiveEnabled: true,
+      getSessionUsageArchive: () => ({ version: 1, sessions: {} }) });
+    options.dailyHistoryArchiveOptions = { path: path.join(options.homeDir, 'daily.json') };
+    let projection;
+    await collectUsageOnce({ ...options, onSourceArchiveComputed: value => { projection = value; },
+      runTokscale: async () => report([event('A', 15, 'mirror')]), runGraph: async () => graph([event('A', 15, 'mirror')], {}) });
+    const freshReport = () => {
+      const result = report(mixed ? [event('B', 20, 'mirror')] : []);
+      for (const row of result.entries) row.sessionId = 'fresh-session';
+      for (const row of result.sourceUsage.sessions) row.sessionId = 'fresh-session';
+      return result;
+    };
+    let captured;
+    const selected = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection,
+      onAnchorComputed: value => { captured = value; },
+      runTokscale: async () => freshReport(), runGraph: () => { throw new Error('no interval graph'); } });
+    const warm = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection,
+      todayOnlyAnchor: anchorOf(captured), runTokscale: async input => {
+        assert.deepEqual(input.flags, ['--today']); return freshReport();
+      }, runGraph: () => { throw new Error('no warm graph'); } });
+    const peer = await collectUsageOnce({ ...base(t), deviceId: 'remote', runTokscale: async () => report([event('A', 15)]) });
+    for (const name of ['today', 'month', 'allTime']) {
+      assert.equal(selected[name].totalTokens, mixed ? 35 : 15);
+      assert.deepEqual(new Set(selected.usageIdentity.periods[name].events.map(e => e.id)), new Set(mixed ? [id('A'), id('B')] : [id('A')]));
+    }
+    for (const record of [selected, warm]) for (const hub of [{ aggregateDevices }, workerUsage]) for (const pair of [[record, peer], [syncPayload(record), syncPayload(peer)]]) {
+      const result = hub.aggregateDevices(pair, 600000, now.getTime());
+      for (const name of ['today', 'month', 'allTime']) assert.equal(result.periods[name].totalTokens, mixed ? 35 : 15);
     }
   });
 }

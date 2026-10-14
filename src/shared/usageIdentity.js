@@ -199,6 +199,9 @@ function sameCounters(left, right) {
 
 function normalizedPeriodClaim(raw, accepted) {
   const claim = periodCounters(raw);
+  // Root-only timing can describe a retained record with unavailable model
+  // throughput, but cannot deduct root timing while leaving an exact model map.
+  if (accepted?.modelThroughput && !claim.modelThroughput && TIMING.some(field => (claim[field] || 0) > 0)) return null;
   if (!equal(claim.totalTokens, claim.clients.claude) || !equal(claim.costUsd, claim.clientCosts.claude)
     || Object.keys(claim.clients).some(key => key !== 'claude')
     || Object.keys(claim.clientCosts).some(key => key !== 'claude')

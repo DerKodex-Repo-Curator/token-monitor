@@ -41,7 +41,7 @@ const { applySourceDailyUsage } = require('./usage/sourceDailyUsage');
 const sourceLedger = require('./usage/sourceLedger');
 const { legacyCostsEqual } = sourceLedger;
 const { acceptedClaudeWindows, reconcileClaudePeriodState } = require('./usage/claudePeriodState');
-const { periodIdentityStateFromSource, replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, historyIdentityFromLedger } = require('./usage/sourceIdentity');
+const { periodIdentityStateFromSource, replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, supplementNativeIdentityState, historyIdentityFromLedger } = require('./usage/sourceIdentity');
 const { readSessionUsageArchiveEvidence } = require('./usage/sessionUsageArchiveStore');
 const {
   createSubprocessTermination,
@@ -1794,9 +1794,14 @@ async function collectUsageOnce(options) {
     // Accepted accounting may retain a different revision despite equal totals.
     // Never use a fresh scan's claims as proof for that retained revision.
     const locked = claudeReadBlocked || acceptedSourceProjection.scopes?.some(scope => scope.clients?.includes('claude') && scope.blockNativeWatch);
-    // A History-disabled full capture keeps fresh native counters (replaceLive:
-    // false); the cached ledger cannot certify that different revision.
-    if (!anchorUsed && !options.includeHistory) acceptedIdentityState = {};
+    // A cached projection supplements live native sessions. Its ledger cannot
+    // certify their fresh revision; use the same native capture instead. Locked
+    // or legacy-owned Claude accounting replaces native rows and needs its own
+    // accepted proof (legacy boundaries cannot certify event identity).
+    const legacyClaude = acceptedSourceProjection.legacyPeriods?.some(boundary => boundary.clients?.includes('claude'));
+    if (!options.includeHistory && !locked) acceptedIdentityState = legacyClaude ? {}
+      : supplementNativeIdentityState(nativeIdentityState, identityStateFromLedger(ledger, summary, { timeZone, todayKey, allTimeSince }),
+        windowsPeriods, nativeRawPresence);
     else if (!anchorUsed || locked) acceptedIdentityState = ledger
       ? identityStateFromLedger(ledger, summary, { timeZone, todayKey, allTimeSince }) : {};
   }

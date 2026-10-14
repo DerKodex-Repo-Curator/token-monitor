@@ -75,6 +75,26 @@ test('root timing proof remains idempotent when accepted optional model throughp
   }
 });
 
+test('root-only timing cannot leave an accepted exact model map undeducted', () => {
+  const host = device('host', [{ id: id(1), usage: usage(100) }], 'mirror');
+  const peer = device('peer', [{ id: id(1), usage: usage(100) }]);
+  for (const evidence of Object.values(host.usageIdentity.periods)) delete evidence.events[0].usage.modelThroughput;
+  const fixed = packUsageIdentity(host.usageIdentity);
+  assert.ok(fixed, 'root-only evidence can encode before the receiver bounds it');
+  for (const evidence of [host.usageIdentity, fixed]) for (const hub of [require('../../src/shared/usage'), workerUsage]) {
+    const record = hub.normalizeDeviceRecord({ ...host, usageIdentity: evidence });
+    assert.equal(record.usageIdentity, undefined);
+    const result = hub.aggregateDevices([{ ...host, usageIdentity: evidence }, peer], 600000, Date.parse(NOW));
+    for (const period of Object.values(result.periods)) {
+      assert.equal(period.totalTokens, 200);
+      assert.equal(period.timedTokens, 200);
+      assert.equal(period.timedDurationMs, 200);
+      assert.equal(period.modelThroughput['claude-sonnet-4-5'].timedTokens, 200);
+      assert.equal(period.modelThroughput['claude-sonnet-4-5'].timedDurationMs, 200);
+    }
+  }
+});
+
 test('a duplicated event cannot claim a disjoint event reasoning even within the accepted session bound', () => {
   const shared = { id: id(1), usage: usage(100) };
   const separate = { id: id(2), usage: usage(200) };

@@ -221,6 +221,27 @@ function identityStateFromLedger(ledger, periods, options = {}) {
   return result;
 }
 
+// Mirrors cached source projection selection: live sessions use the native
+// capture, absent sessions use retained ledger accounting. This is inventory
+// selection, never a comparison of totals or a new ledger acceptance decision.
+function supplementNativeIdentityState(native, retained, periods, rawPresence) {
+  const result = {};
+  for (const name of PERIODS) {
+    const live = new Set(rawPresence?.[name] || Object.keys(periods[name]?.sessions || {}));
+    const prior = retained[name];
+    const fresh = native[name];
+    const events = [...(fresh?.events || []).filter(event => live.has(`claude:${event.sessionId}`)),
+      ...(prior?.events || []).filter(event => !live.has(`claude:${event.sessionId}`))];
+    const counts = new Map();
+    for (const event of events) counts.set(event.id, (counts.get(event.id) || 0) + 1);
+    // An event represented by multiple selected owners is not a unique claim.
+    // Preserve ordinary usage, but omit that ambiguous optional evidence.
+    result[name] = { capturedAt: [fresh?.capturedAt, prior?.capturedAt].filter(Boolean).sort().at(-1) || '',
+      events: events.filter(event => counts.get(event.id) === 1) };
+  }
+  return result;
+}
+
 function historyIdentityFromLedger(ledger, options = {}) {
   if (ledger?.version !== 2 || !ledger.scopes) return null;
   const result = { capturedAt: '', events: [] };
@@ -250,5 +271,5 @@ function historyIdentityFromLedger(ledger, options = {}) {
 }
 
 module.exports = { periodIdentityFromSource, periodIdentityStateFromSource, identityPeriodFromState,
-  replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, historyIdentityFromLedger,
+  replaceIdentityToday, usageIdentityFromState, identityStateFromLedger, supplementNativeIdentityState, historyIdentityFromLedger,
   nonnegativeCountersFit, identityDayKey, rebucketIdentityState, acceptedClaudeWindows };
