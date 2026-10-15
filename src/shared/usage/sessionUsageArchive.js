@@ -18,6 +18,7 @@ const { readJson, sharedDataDir, writeJsonAtomic } = require('../config');
 const { filterReasonixSyntheticSessions, isReasonixSyntheticSession } = require('../providers/reasonix/sessionGuard');
 const { splitClientIdFor } = require('../clientIdentitySplits');
 const { classifySessionSourcePath, ownedSessionSourcePath } = require('./sessionSourceState');
+const { RELEASED_CLIENT_ALIASES, releasedArchiveClient, sessionArchiveProjectionEntries } = require('./sessionArchiveAliases');
 const {
   isLegacyCursorEntry,
   legacyCursorLookup,
@@ -82,7 +83,8 @@ function isSessionUsageArchiveEntryEvidence(key, entry) {
   const counter = candidate => typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0;
   if (typeof key !== 'string' || ['__proto__', 'constructor', 'prototype'].includes(key) || key.includes('\0')
     || !evidenceRecord(entry) || typeof entry.client !== 'string' || !entry.client.trim()
-    || normalizeClientName(entry.client) !== entry.client || typeof entry.sessionId !== 'string' || !entry.sessionId.trim()
+    || normalizeClientName(releasedArchiveClient(entry.client)) !== releasedArchiveClient(entry.client)
+    || typeof entry.sessionId !== 'string' || !entry.sessionId.trim() || entry.sessionId.includes('\0')
     || key !== `${entry.client}:${entry.sessionId}` || !evidenceRecord(entry.periods)) return false;
   if (entry.accountingSource !== undefined && entry.accountingSource !== 'wsl') return false;
   const names = Object.keys(entry.periods);
@@ -98,11 +100,13 @@ function isSessionUsageArchiveEntryEvidence(key, entry) {
     const row = entry.periods[name];
     if (!evidenceRecord(row) || row.client !== entry.client || row.sessionId !== entry.sessionId
       || !counter(row.totalTokens) || !counter(row.costUsd)) return false;
-    for (const field of ['outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'unclassifiedTokens']) {
+    for (const field of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'unclassifiedTokens', 'reasoningTokens']) {
       if (row[field] !== undefined && !counter(row[field])) return false;
     }
     for (const field of ['models', 'modelCosts']) {
-      if (row[field] !== undefined && (!evidenceRecord(row[field]) || !Object.values(row[field]).every(counter))) return false;
+      if (row[field] !== undefined && (!evidenceRecord(row[field]) || !Reflect.ownKeys(row[field]).every(key =>
+        typeof key === 'string' && !['__proto__', 'constructor', 'prototype'].includes(key)
+        && Object.prototype.propertyIsEnumerable.call(row[field], key) && counter(row[field][key])))) return false;
     }
     return true;
   });
@@ -118,10 +122,21 @@ function normalizeSessionUsageArchive(value) {
   const source = value?.sessions && typeof value.sessions === 'object' ? value.sessions : value;
   const normalized = { version: 1, sessions: {} };
   if (!source || typeof source !== 'object') return normalized;
+  const aliasPeers = new Set(Object.entries(source).filter(([key, entry]) => entry
+    && Object.hasOwn(RELEASED_CLIENT_ALIASES, entry.client) && isSessionUsageArchiveEntryEvidence(key, entry))
+    .map(([, entry]) => `${releasedArchiveClient(entry.client)}:${entry.sessionId}`));
 
   for (const [rawKey, rawEntry] of Object.entries(source)) {
     if (!rawEntry || typeof rawEntry !== 'object') continue;
     if (isReasonixSyntheticSession(rawEntry, rawKey)) continue;
+    if ((Object.hasOwn(RELEASED_CLIENT_ALIASES, rawEntry.client) || aliasPeers.has(rawKey))
+      && isSessionUsageArchiveEntryEvidence(rawKey, rawEntry)) {
+      // A canonical peer may already exist with different accounting/windows.
+      // Preserve the literal released observation through SQLite migration and
+      // later captures; collision folding belongs only to the projection.
+      normalized.sessions[rawKey] = cloneJson(rawEntry);
+      continue;
+    }
     const rawPeriods = rawEntry.periods && typeof rawEntry.periods === 'object'
       ? rawEntry.periods
       : rawEntry;
@@ -659,12 +674,14 @@ function applySessionUsageArchive(summary, archive, options = {}) {
     ? canonicalSessionUsageArchive(archive)
     : normalizeSessionUsageArchive(archive);
   const now = toDate(options.now);
+  const projectedArchive = { ...normalizedArchive, sessions: Object.fromEntries(sessionArchiveProjectionEntries(normalizedArchive)) };
   const sourceManagedKeys = new Set(summary.sessionArchiveSource?.managedKeys || []);
   const managedKeys = new Set([...sourceManagedKeys, ...(summary.codexLocalSessionKeys || [])]);
   const checkedClients = new Set((summary.sessionArchiveSource?.boundaryCheckedClients || []).map(normalizeClientName));
   const ownedClients = new Set((summary.sessionArchiveSource?.ownedClients || []).map(normalizeClientName).filter(client => checkedClients.has(client)));
+  const revokedTitles = summary.sessionArchiveSource?.revokedTitles;
   const next = scrubSessionArchiveSource(summary, options);
-  enrichManagedSessionMetadata(next, normalizedArchive, sourceManagedKeys, summary.sessionArchiveSource?.revokedTitles);
+  enrichManagedSessionMetadata(next, projectedArchive, sourceManagedKeys, revokedTitles);
   const targetPeriods = new Map();
   const targetFor = (periodName) => {
     if (!targetPeriods.has(periodName)) {
@@ -678,7 +695,7 @@ function applySessionUsageArchive(summary, archive, options = {}) {
 
   const supersededRows = [];
   const mergedRows = [];
-  for (const [archiveKey, entry] of Object.entries(normalizedArchive.sessions)) {
+  for (const [archiveKey, entry] of Object.entries(projectedArchive.sessions)) {
     // The source/day projection already owns this ID, including a zero period.
     if (managedKeys.has(archiveKey) || ownedClients.has(entry.client) && entry.accountingSource !== 'wsl') continue;
     for (const periodName of PERIODS) {

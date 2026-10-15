@@ -17,6 +17,7 @@ const archiveReadCache = new Map();
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const { emptyPeriod } = require('./usage');
 const { addArchivedSession, isSessionUsageArchiveEvidence } = require('./usage/sessionUsageArchive');
+const { sessionArchiveProjectionEntries } = require('./usage/sessionArchiveAliases');
 const { captureSourceLedger, legacyCostsEqual, legacyDaysMatch, legacySessionAccounting, selectLegacyDay, largerLegacyPeriod, normalizeSourceLedger, projectSourceLedger, sourceSnapshotsFromGraphs } = require('./usage/sourceLedger');
 
 function sourceProjectionClient(value) {
@@ -296,8 +297,11 @@ function retainedSessionBoundary(sessionArchive, families, wslKeys = new Set()) 
   const sessions = {};
   const days = {};
   const dayPeriods = {};
+  const ambiguousDays = new Set();
   const clients = new Set();
-  for (const [archiveKey, entry] of Object.entries(sessionArchive?.sessions || {})) {
+  const entries = sessionArchiveProjectionEntries(sessionArchive, (key, entry) => entry
+    && entry.accountingSource !== 'wsl' && !wslKeys.has(sourceProjectionKey(key)));
+  for (const [archiveKey, entry] of entries) {
     if (!entry || typeof entry !== 'object') continue;
     if (entry.accountingSource === 'wsl' || wslKeys.has(sourceProjectionKey(archiveKey))) continue;
     const client = sourceProjectionClient(entry.client);
@@ -316,16 +320,24 @@ function retainedSessionBoundary(sessionArchive, families, wslKeys = new Set()) 
       const row = { ...session, client, sessionId: entry.sessionId };
       if (name === 'today') {
         addArchivedSession(dayPeriods[bucket] ||= emptyPeriod(), row, key);
+        if (entry.aliasConflict) ambiguousDays.add(bucket);
       }
       const field = name === 'today' ? 'day' : 'month';
       if (!periods[name] || name !== 'allTime' && bucket > periods[name][field]) {
         periods[name] = { ...(name === 'allTime' ? {} : { [field]: bucket }), period: emptyPeriod() };
       }
-      if (name === 'allTime' || periods[name][field] === bucket) addArchivedSession(periods[name].period, row, key);
+      if (name === 'allTime' || periods[name][field] === bucket) {
+        addArchivedSession(periods[name].period, row, key);
+        // Compatibility recovery also consults legacyPeriods.today. Withhold
+        // the conflicting attribution there too, or it would recreate the
+        // day's deliberately unknown allocation during normalization/reopen.
+        if (entry.aliasConflict) delete periods[name].period.sessions[key];
+      }
     }
   }
   for (const [date, period] of Object.entries(dayPeriods)) {
     const day = allocatedLegacyDay(period, date);
+    if (day && ambiguousDays.has(date)) delete day.sessionAllocation;
     if (day) days[date] = day;
   }
   return { periods, sessions, clients: [...clients], days, hasUsage: clients.size > 0 };
@@ -1135,7 +1147,15 @@ function retainDailyHistory(graphs, options = {}) {
   }
   // A complete reread of identical accounting must still commit before it can
   // release a process-local rejection lock. A disabled writer grants no release.
-  if (!committed && releasesWatchLock(next)) next = lockArchive(committedArchive);
+  if (!committed && (!isDeepStrictEqual(next.sourceLedger, committedArchive.sourceLedger) || releasesWatchLock(next))) {
+    // A disabled writer is not a successful commit either. New ownership and
+    // corrections must use the same durable boundary as the throwing writer.
+    // Rejection locks remain useful in memory even when they could not persist.
+    for (const [id, scope] of Object.entries(next.sourceLedger?.scopes || {})) {
+      if (scope.blockNativeWatch) pendingLocks.add(id);
+    }
+    next = lockArchive(committedArchive);
+  }
   return graphFromDailyHistoryArchive([], next, { ...options, canonical: true });
 }
 

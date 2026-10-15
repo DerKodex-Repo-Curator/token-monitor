@@ -31,7 +31,13 @@ function removeIfPresent(filePath, unlinkSync = fs.unlinkSync) {
 
 function parseArchiveRow(row) {
   try {
-    const normalized = normalizeSessionUsageArchive({ sessions: { [row.session_key]: JSON.parse(row.entry_json) } });
+    const literal = JSON.parse(row.entry_json);
+    if (isSessionUsageArchiveEntryEvidence(row.session_key, literal)) {
+      // A valid persisted tombstone remains evidence, but the display cursor
+      // must still remove its expired payload during revision catch-up.
+      return Object.keys(literal.periods).length ? literal : null;
+    }
+    const normalized = normalizeSessionUsageArchive({ sessions: { [row.session_key]: literal } });
     return normalized.sessions[row.session_key] || Object.values(normalized.sessions)[0] || null;
   } catch (_) {
     return null;

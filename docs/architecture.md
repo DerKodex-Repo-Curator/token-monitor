@@ -39,6 +39,10 @@ Only app, agent and packaging entry points run `ensure:tokscale`; install, Hub, 
 
 ### Source usage retention
 
+Released generic `micode` archives remain valid evidence for the tracked-client rename to `mimo`. Validation checks literal stored key, row identity and typed counters before admitting that explicit historical alias. JSON-to-SQLite migration and subsequent reads preserve both literal observations when a canonical peer exists. Display and the exclusive legacy boundary fold the pair once, selecting a whole period by its window, token/cost floor and deterministic frontier tie-break; they never sum presumed duplicates or combine component maxima. Conflicting pairs remain unresolved and cannot prove dated allocation. Their original observations stay in the generic archive, while unrelated proven source families may migrate normally. This compatibility does not admit obsolete scanner snapshot formats or canonicalize raw scanner identities.
+
+New source ownership and corrections require a successful archive commit even when the writer is disabled or a lazy writer guard changes during the tick. A read-only collector projects the committed source revision and preserves rejection locks; it cannot publish an uncommitted replacement as accepted accounting. Generic-only display previews retain their existing behavior.
+
 Source-owned sessions retain native conversation and T3 thread identities as metadata without replaying counters from the generic archive. A parent session ID and its optional client namespace form one relationship; a newly observed same-client parent must not inherit an older cross-client namespace.
 
 A full scan without a new History graph supplements fresh native accounting with retained ledger rows; cached projections cannot replace live counters. Healthy observations may initialize and advance an exclusive legacy boundary, including actual dated graph aggregates, without granting event migration authority or allocating an undated allTime residual. Valid expired today/month session tombstones remain readable migration evidence.
