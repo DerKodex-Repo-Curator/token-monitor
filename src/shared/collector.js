@@ -963,6 +963,8 @@ async function collectHistoryOnce(options) {
         sessionUsageArchive,
         nativeRawClients: options.nativeRawClients,
         nativePeriods: options.nativePeriods,
+        sourceArchiveSnapshot: options.sourceArchiveSnapshot,
+        sourceGraphUnavailable: failureCode === 'history-graph-failed',
         liveDays: options.dailyHistoryLiveDays,
         pricingRevision: options.pricingRevision,
         customPricingActive: options.customPricingActive,
@@ -1544,6 +1546,7 @@ async function collectUsageOnce(options) {
       getSessionUsageArchive: options.getSessionUsageArchive,
       sessionUsageArchive: options.sessionUsageArchive,
       sessionUsageArchiveOptions: options.sessionUsageArchiveOptions,
+      sourceArchiveSnapshot: options.sourceArchiveSnapshot,
       // Unavailable raw attribution is unknown inventory, not a proved empty
       // scan. Preserve that distinction for first ownership and corrections.
       nativeRawClients: Object.values(nativeRawPartitions).some(partitions => partitions === null) ? null

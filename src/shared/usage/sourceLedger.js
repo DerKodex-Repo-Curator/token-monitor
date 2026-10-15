@@ -360,8 +360,8 @@ function captureSourceLedger(value, graphs, options = {}) {
       const same = Object.keys(scan.sessions).every(key => previous.sessions[key])
         && Object.entries(scan.events).every(([uid, event]) => isDeepStrictEqual(previous.events[uid], event))
         && Object.entries(previous.events).every(([uid, event]) => !scan.sessions[event.ownerKey] || scan.events[uid]);
-      if (same && !reason) continue;
-      reason ||= 'conflicting-revision';
+      if (same && !reason && !previous.blockNativeWatch) continue;
+      if (!same) reason ||= 'conflicting-revision';
     }
     edit();
     if (reason) {

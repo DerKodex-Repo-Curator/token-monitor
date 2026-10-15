@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { collectUsageOnce, localTodayKey } = require('../../src/shared/collector');
+const { collectUsageOnce, startCollector, localTodayKey } = require('../../src/shared/collector');
 const { extractUsageFromTokscale, mergePeriods, aggregateDevices } = require('../../src/shared/usage');
 const { serializeSyncPayload } = require('../../src/shared/syncPayload');
 const { sessionActivityState } = require('../../src/shared/sessionLive');
@@ -41,7 +41,7 @@ function graph(rows, capturedAt = now) {
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'source-ledger-review-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  return { home, options: { clients: 'codex', deviceId: 'review', allTimeSince: '2026-01-01', now, homeDir: home, env: {},
+  return { home, options: { clients: 'codex', deviceId: 'review', allTimeSince: '2026-01-01', now, homeDir: home, env: {}, osInfo: {},
     projectsEnabled: false, wslScanEnabled: false, codexLocalUsageEnabled: false, includeHistory: true,
     dailyHistoryArchiveEnabled: true, sessionUsageArchive: { version: 1, sessions: {} },
     dailyHistoryArchiveOptions: { path: path.join(home, 'daily.json') },
@@ -219,7 +219,7 @@ test('full and cached source projection leave disabled legacy usage to its froze
   }
 });
 
-test('failed daily writes protect committed source usage through cached watch, restart and recovery', async t => {
+test('failed daily writes protect committed source usage through cached full-native scans, restart and recovery', async t => {
   const f = fixture(t);
   let input = 45, partial = false, failWrite = false, projection;
   const failures = [];
@@ -266,4 +266,107 @@ test('failed daily writes protect committed source usage through cached watch, r
   assert.equal(recovered.history.summary.totalTokens, 15);
   assert.notEqual(projection.scopes[0].blockNativeWatch, true);
   assert.ok(failures.some(value => value.failureCode === 'daily-history-archive-failed'));
+});
+
+for (const restart of [false, true]) test(`failed daily write locks survive unavailable History and anchored watch; restart=${restart}`, async t => {
+  const f = fixture(t);
+  let input = 45, clock = now, partial = false, failWrite = false, unavailable = false;
+  const updates = [], scans = [];
+  let graphCalls = 0;
+  const options = { ...f.options, now: () => clock, includeHistory: undefined,
+    watchEnabled: false, sessionActivityPolling: false, anchorPersistenceEnabled: false,
+    intervalMs: 3600000,
+    runTokscale: async ({ flags }) => { scans.push(flags); return native([row('A', input)]); },
+    runGraph: async () => {
+      graphCalls++;
+      if (unavailable) throw new Error('offline graph unavailable');
+      const value = graph([row('A', input)], clock);
+      if (partial) value.sourceUsage.scopes[0].readStatus = 'partial';
+      return value;
+    },
+    dailyHistoryArchiveOptions: { ...f.options.dailyHistoryArchiveOptions,
+      writeJsonAtomic: (file, value) => {
+        if (failWrite) throw Object.assign(new Error('read-only disk'), { code: 'EROFS' });
+        fs.writeFileSync(file, JSON.stringify(value));
+      } },
+    onUpdate: value => updates.push(value) };
+  const check = (expected) => {
+    const value = updates.at(-1);
+    for (const name of ['today', 'month', 'allTime']) {
+      assert.equal(value[name].totalTokens, expected, name);
+      assert.equal(value[name].sessions['codex:A'].totalTokens, expected, `${name} session`);
+    }
+    assert.deepEqual(value.sessionArchiveSource.ownedClients, ['codex']);
+  };
+  let runtime = startCollector(options);
+  try {
+    await runtime.whenIdle();
+    check(45);
+    const committed = fs.readFileSync(f.options.dailyHistoryArchiveOptions.path);
+    input = 15; partial = true; failWrite = true; clock = new Date(now.getTime() + 1000);
+    await runtime.tick('manual', { forceHistory: true });
+    check(45);
+    assert.deepEqual(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path), committed);
+    unavailable = true; clock = new Date(now.getTime() + 2000);
+    if (restart) {
+      runtime.stop(); await runtime.whenIdle();
+      runtime = startCollector(options);
+      await runtime.whenIdle();
+    } else await runtime.tick('manual', { forceHistory: true });
+    check(45);
+    assert.equal(updates.at(-1).history.summary.totalTokens, 45);
+    assert.deepEqual(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path), committed);
+    const graphsBeforeWatch = graphCalls;
+    scans.length = 0; clock = new Date(now.getTime() + 3000);
+    await runtime.tick('watch:fixture', { todayOnly: true });
+    assert.deepEqual(scans, [['--today']], 'the regression uses an actual anchored watch');
+    assert.equal(graphCalls, graphsBeforeWatch, 'watch skips unavailable History');
+    check(45);
+    unavailable = false; partial = false; failWrite = false; clock = new Date(now.getTime() + 4000);
+    await runtime.tick('manual', { forceHistory: true });
+    check(15);
+    assert.notEqual(JSON.parse(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path)).sourceLedger.scopes.codex.blockNativeWatch, true);
+    input = 20; scans.length = 0; clock = new Date(now.getTime() + 5000);
+    await runtime.tick('watch:fixture', { todayOnly: true });
+    assert.deepEqual(scans, [['--today']]);
+    check(20);
+    assert.equal(runtime.getDiagnostics().lastHistoryFailureCode, null);
+  } finally { runtime.stop(); await runtime.whenIdle(); }
+});
+
+test('an identical healthy revision releases a failed-write lock only after a successful commit', async t => {
+  const f = fixture(t);
+  let input = 45, partial = false, failWrite = false, writes = 0, projection;
+  const options = { ...f.options,
+    runTokscale: async () => native([row('A', input)]),
+    runGraph: async () => {
+      const value = graph([row('A', input)], partial ? new Date(now.getTime() + 1000) : now);
+      if (partial) value.sourceUsage.scopes[0].readStatus = 'partial';
+      return value;
+    }, onSourceArchiveComputed: value => { projection = value; },
+    dailyHistoryArchiveOptions: { ...f.options.dailyHistoryArchiveOptions,
+      writeJsonAtomic: (file, value) => {
+        writes++;
+        if (failWrite) throw Object.assign(new Error('read-only disk'), { code: 'EROFS' });
+        fs.writeFileSync(file, JSON.stringify(value));
+      } } };
+  await collectUsageOnce(options);
+  input = 15; partial = true; failWrite = true;
+  await collectUsageOnce(options);
+  assert.equal(projection.scopes[0].blockNativeWatch, true);
+  input = 45; partial = false;
+  const before = writes;
+  await collectUsageOnce({ ...options, sourceArchiveSnapshot: projection });
+  assert.ok(writes > before, 'revalidating identical accounting must attempt its commit');
+  assert.equal(projection.scopes[0].blockNativeWatch, true);
+  failWrite = false;
+  const beforeDisabled = writes;
+  await collectUsageOnce({ ...options, sourceArchiveSnapshot: projection, dailyHistoryArchiveWriteEnabled: false });
+  assert.equal(writes, beforeDisabled);
+  assert.equal(projection.scopes[0].blockNativeWatch, true, 'a disabled writer cannot release the rejection lock');
+  await collectUsageOnce({ ...options, sourceArchiveSnapshot: projection });
+  assert.notEqual(projection.scopes[0].blockNativeWatch, true);
+  input = 50;
+  const watch = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection });
+  assert.equal(watch.allTime.totalTokens, 50);
 });
