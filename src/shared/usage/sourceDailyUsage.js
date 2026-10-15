@@ -1,9 +1,10 @@
 'use strict';
 
-const { extractUsageFromTokscale, mergePeriods, emptyPeriod, normalizePeriod, normalizeClientName, normalizeModelNameForClient, applyProjectRollups, UNATTRIBUTED_USAGE_CLIENT } = require('../usage');
+const { extractUsageFromTokscale, mergePeriods, emptyPeriod, normalizePeriod, normalizeClientName, normalizeModelNameForClient, applyProjectRollups, applyPeriodDelta, UNATTRIBUTED_USAGE_CLIENT } = require('../usage');
 const { isDeepStrictEqual } = require('node:util');
 const SESSION_METADATA_FIELDS = ['title', 'projectId', 'projectLabel', 'sessionKind', 'nativeSessionId', 't3ThreadId', 'startedAt', 'lastUsedAt',
   'contextTokens', 'contextWindow', 'turnEnded', 'waitingForInput', 'promptCache', 'liveActivity'];
+const LIVE_SESSION_METADATA_FIELDS = ['contextTokens', 'contextWindow', 'turnEnded', 'waitingForInput', 'promptCache', 'liveActivity'];
 const { legacyAllocationMatches, legacySessionAccounting, largerLegacyPeriod, rebucketSourceUsage } = require('./sourceLedger');
 const { addArchivedSession } = require('./sessionUsageArchive');
 const periodCache = new WeakMap();
@@ -105,7 +106,97 @@ function aggregatePeriod(days, name, today, since, nativeToday) {
   // A healthy native Today is an exact window observation even if the last
   // full scan had no usage today. It never allocates an undated lifetime floor.
   if (nativeToday && inWindow(today, name, today, since, false) && !selected.some(day => day.date === today)) periods.push(nativeToday);
-  return mergePeriods(...periods);
+  // Retained days and fresh native Today can have different input provenance.
+  // Validate each complete fragment before folding their accounting together.
+  const completeAllocation = periods.every(period => period === nativeToday
+    ? hasCompleteNativeAllocation(period) : hasCompleteLegacyAllocation(period));
+  return { period: mergePeriods(...periods), completeAllocation };
+}
+
+function legacyClient(client) {
+  client = String(client || '').trim().toLowerCase();
+  if (client.startsWith('cc-mirror/')) return 'claude';
+  client = normalizeClientName(client);
+  return client === '9router' ? 'gjc' : client;
+}
+function legacyKey(key) {
+  const separator = key.indexOf(':');
+  return `${legacyClient(key.slice(0, separator))}:${key.slice(separator + 1)}`;
+}
+function wslSessionPeriod(period, keys, canonical = false) {
+  const result = emptyPeriod();
+  let ambiguousModels = false;
+  for (const [key, value] of Object.entries(legacySessionAccounting(period?.sessions))) {
+    if (!keys.has(key)) continue;
+    const row = canonical ? { ...value, client: legacyClient(value.client) } : value;
+    addArchivedSession(result, row, canonical ? legacyKey(key) : key);
+    // Unlike a retained generic DTO, these rows are from the current WSL
+    // observation. Preserve their proven input instead of inventing unknown use.
+    const input = Math.min(row.inputTokens || 0, Math.max(0, row.totalTokens
+      - (row.outputTokens || 0) - (row.cacheReadTokens || 0) - (row.cacheWriteTokens || 0)));
+    result.unclassifiedTokens -= input;
+    result.clientUnclassifiedTokens[row.client] = (result.clientUnclassifiedTokens[row.client] || 0) - input;
+    const models = Object.keys(row.models || {}).filter(model => row.models[model] > 0);
+    if (models.length === 1) result.modelUnclassifiedTokens[models[0]] = (result.modelUnclassifiedTokens[models[0]] || 0) - input;
+    else if (models.length > 1) ambiguousModels = true;
+  }
+  result.capabilities.tokenComponents = !ambiguousModels && result.unclassifiedTokens === 0;
+  return normalizePeriod(result);
+}
+
+function hasCompleteLegacyAllocation(period) {
+  const rows = legacySessionAccounting(period.sessions);
+  const keys = new Set(Object.keys(rows));
+  // Current input provenance and retained unknown input are different whole
+  // observations. Either allocation must match all selected accounting fields.
+  if (legacyAllocationMatches(period, wslSessionPeriod(period, keys), keys.size)) return true;
+  const retained = emptyPeriod();
+  for (const [key, row] of Object.entries(rows)) addArchivedSession(retained, row, key);
+  return legacyAllocationMatches(period, retained, keys.size);
+}
+
+function hasCompleteNativeAllocation(period) {
+  const rows = legacySessionAccounting(period.sessions);
+  if (Object.values(rows).some(row => ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens']
+    .reduce((sum, field) => sum + (row[field] || 0), 0) > row.totalTokens)) return false;
+  const allocation = wslSessionPeriod(period, new Set(Object.keys(rows)));
+  // Current native partitions carry model components from the same entries as
+  // their sessions. A whole-fragment coverage proof can retain those maps;
+  // a selected WSL session cannot borrow them to guess its own model split.
+  if (Object.values(period.models).reduce((sum, tokens) => sum + tokens, 0) !== period.totalTokens) return false;
+  const fields = [['modelOutputs', 'outputTokens'], ['modelCacheReads', 'cacheReadTokens'],
+    ['modelCacheWrites', 'cacheWriteTokens'], ['modelUnclassifiedTokens', 'unclassifiedTokens']];
+  for (const [field, total] of fields) {
+    const map = period[field] || {};
+    if (Object.entries(map).some(([model, tokens]) => !Number.isSafeInteger(tokens) || tokens < 0
+      || tokens > (period.models[model] || 0))
+      || Object.values(map).reduce((sum, tokens) => sum + tokens, 0) !== period[total]) return false;
+    allocation[field] = { ...map };
+  }
+  if (Object.entries(period.models).some(([model, tokens]) => fields
+    .reduce((sum, [field]) => sum + (period[field]?.[model] || 0), 0) > tokens)) return false;
+  // Session-derived totals, client components, model/client-model tokens and
+  // every cost map must still close against this exact native observation.
+  return legacyAllocationMatches(period, allocation, Object.keys(rows).length);
+}
+
+function removeWslSessions(supplemental, wsl, keys) {
+  if (!keys.size) return supplemental;
+  const removed = wslSessionPeriod(wsl, keys);
+  const result = applyPeriodDelta(supplemental, emptyPeriod(), removed);
+  for (const key of keys) delete result.sessions[key];
+  if (!removed.capabilities.tokenComponents) {
+    // Multi-model session DTOs cannot allocate their components by model.
+    // Keep remaining totals, but do not leave the removed model's split behind.
+    result.capabilities.tokenComponents = false;
+    for (const model of Object.keys(removed.models)) {
+      for (const field of ['modelOutputs', 'modelCacheReads', 'modelCacheWrites']) delete result[field][model];
+      result.modelUnclassifiedTokens[model] = result.models[model] || 0;
+    }
+  }
+  result.capabilities.throughput = false;
+  delete result.modelThroughput;
+  return result;
 }
 
 // Ownership is permanent, independent of this tick's read health and calendar.
@@ -141,6 +232,9 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
   const lockedRawOwners = new Set(selectedScopes.filter(scope => scope.blockNativeWatch === true).flatMap(scope => scope.clients));
   const lockedOwners = new Set([...lockedRawOwners].map(normalizeClientName));
   const legacyPeriodIds = new Set((sourceUsage.legacyPeriods || []).map(boundary => boundary.scopeId));
+  const wslKeys = new Set(options.wslSessionKeys || []);
+  const absorbedWsl = new Map(snapshots.filter(row => row.mode === 'legacy' && legacyPeriodIds.has(row.scopeId))
+    .map(row => [`${legacyClient(row.client)}:${row.sessionId}`, row.scopeId]));
   const nativeLegacyRaw = new Set(sourceUsage.scopes.filter(scope => scope.mode === 'legacy'
     && legacyPeriodIds.has(scope.id) && !scope.blockNativeWatch).flatMap(scope => scope.clients).filter(client => rawOwners.has(client)));
   const metadata = new Map();
@@ -161,32 +255,49 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
     const retained = [];
     const legacyPeriodScopes = new Set();
     const legacyPeriodOwners = new Set();
+    const removedWslKeys = new Set();
     for (const boundary of sourceUsage.legacyPeriods || []) {
       if (!boundary.clients.some(client => rawOwners.has(client))) continue;
       legacyPeriodScopes.add(boundary.scopeId);
       const boundaryOwners = new Set(boundary.clients.map(normalizeClientName));
+      const boundaryWslKeys = new Set([...wslKeys].filter(key => absorbedWsl.get(legacyKey(key)) === boundary.scopeId));
       boundaryOwners.forEach(client => legacyPeriodOwners.add(client));
       const window = boundary.periods[name];
       const period = window && (name === 'allTime' || name === 'today' && window.day === today
         || name === 'month' && window.month === today.slice(0, 7)) ? structuredClone(window.period) : emptyPeriod();
       const nativeToday = !full && boundary.clients.some(client => nativeLegacyRaw.has(client))
-        ? mergePeriods(...onlyClients(nativeTodayPeriod, boundaryOwners)) : null;
+        ? mergePeriods(...onlyClients(nativeTodayPeriod, boundaryOwners, options.nativePartitions?.today)) : null;
       const allocated = aggregatePeriod(selectedAggregates.filter(day => day.scopeId === boundary.scopeId), name, today, since, nativeToday);
       // These are overlapping observations of one legacy boundary, not an
       // inferred additive union. Undated allTime never creates a daily bucket.
-      let selectedPeriod = largerLegacyPeriod({ period: allocated }, { period }, 'allTime') ? allocated : period;
+      let selectedPeriod = largerLegacyPeriod(allocated, { period }, 'allTime') ? allocated.period : period;
       if (!full && boundary.clients.some(client => nativeLegacyRaw.has(client))) {
-        const candidate = mergePeriods(...onlyClients(native, boundaryOwners));
+        const candidate = mergePeriods(...onlyClients(native, boundaryOwners), wslSessionPeriod(options.wslPeriods?.[name], boundaryWslKeys, true));
         if (largerLegacyPeriod({ period: candidate }, { period: selectedPeriod }, 'allTime')) selectedPeriod = candidate;
+      }
+      const completeAllocation = boundaryWslKeys.size && (selectedPeriod === allocated.period
+        ? allocated.completeAllocation : hasCompleteLegacyAllocation(selectedPeriod));
+      for (const key of boundaryWslKeys) {
+        // A mixed aggregate may allocate only some of its days. A missing
+        // session proves disjointness only when the whole allocation closes.
+        if (selectedPeriod.sessions[legacyKey(key)] || !completeAllocation) removedWslKeys.add(key);
       }
       for (const [key, row] of Object.entries(selectedPeriod.sessions)) {
         copySessionMetadata(row, metadata.get(key));
         row.retained = true;
         row.sourceState = 'unknown';
-        for (const field of ['contextTokens', 'contextWindow', 'turnEnded', 'waitingForInput', 'promptCache', 'liveActivity']) delete row[field];
+        for (const field of LIVE_SESSION_METADATA_FIELDS) delete row[field];
+        const current = native.sessions?.[key];
+        if (current && !current.archived && !current.retained && (!current.sourceState || current.sourceState === 'present')) {
+          delete row.retained;
+          row.sourceState = 'present';
+          delete row.archived;
+          for (const field of LIVE_SESSION_METADATA_FIELDS) if (current[field] !== undefined) row[field] = current[field];
+        }
       }
       retained.push(selectedPeriod);
     }
+    const supplemental = removeWslSessions(options.supplementalPeriods?.[name] || emptyPeriod(), options.wslPeriods?.[name], removedWslKeys);
     for (const snapshot of snapshots) {
       if (legacyPeriodScopes.has(snapshot.scopeId)) continue;
       const key = `${normalizeClientName(snapshot.client)}:${snapshot.sessionId}`;
@@ -247,25 +358,32 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
       }
       if (rawPartitions && options.nativeRawPresence) options.nativeRawPresence[name] = Object.entries(rawPartitions)
         .flatMap(([raw, period]) => Object.values(period.sessions || {}).map(row => `${raw}:${row.sessionId}`));
-      const aggregate = aggregatePeriod(selectedAggregates.filter(day => !legacyPeriodScopes.has(day.scopeId)), name, today, since);
+      const { period: aggregate } = aggregatePeriod(selectedAggregates.filter(day => !legacyPeriodScopes.has(day.scopeId)), name, today, since);
       const displayNative = nativeLegacyRaw.size
         ? mergePeriods(...fallbackUntouched(acceptedNative, new Set([...nativeLegacyRaw].map(normalizeClientName)))) : acceptedNative;
-      summary[name] = mergePeriods(displayNative, ...retained, aggregate, options.supplementalPeriods?.[name] || emptyPeriod());
+      summary[name] = mergePeriods(displayNative, ...retained, aggregate, supplemental);
     } else {
       const replacedOwners = new Set([...lockedOwners, ...legacyPeriodOwners]);
       // An unattributed observation can overlap every owned domain. It cannot
       // be added to retained accepted counters as if it were another source.
       if (replacedOwners.size) replacedOwners.add(UNATTRIBUTED_USAGE_CLIENT);
       const base = replacedOwners.size ? mergePeriods(...fallbackUntouched(native, replacedOwners)) : native;
-      const aggregate = aggregatePeriod(selectedAggregates.filter(day => !legacyPeriodScopes.has(day.scopeId)
+      const { period: aggregate } = aggregatePeriod(selectedAggregates.filter(day => !legacyPeriodScopes.has(day.scopeId)
         && selectedScopes.some(scope => scope.id === day.scopeId && scope.blockNativeWatch)), name, today, since);
-      summary[name] = mergePeriods(base, ...observed.map(row => row.period), ...retained, aggregate, options.supplementalPeriods?.[name] || emptyPeriod());
+      summary[name] = mergePeriods(base, ...observed.map(row => row.period), ...retained, aggregate, supplemental);
     }
   }
   if (full) applyProjectRollups(summary);
 }
 
-function onlyClients(period, selected) {
+function onlyClients(period, selected, partitions) {
+  if (partitions) {
+    const combined = mergePeriods(...Object.values(partitions));
+    if (legacyAllocationMatches(period, combined, Object.keys(combined.sessions).length)
+      && isDeepStrictEqual(legacySessionAccounting(period.sessions), legacySessionAccounting(combined.sessions))) {
+      return Object.entries(partitions).filter(([client]) => selected.has(client)).map(([, value]) => value);
+    }
+  }
   const clients = [...Object.keys(period.clients || {}), ...Object.keys(period.clientCosts || {}),
     ...Object.values(period.sessions || {}).map(row => row.client)];
   return fallbackUntouched(period, new Set(clients.filter(client => !selected.has(client))));

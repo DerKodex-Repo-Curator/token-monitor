@@ -961,6 +961,8 @@ async function collectHistoryOnce(options) {
         // Read before acceptance, not after ownership has retired the old
         // counters. Runtime stores supply their current canonical snapshot.
         sessionUsageArchive,
+        wslSessionKeys: options.wslSessionKeys,
+        wslPeriods: options.wslPeriods,
         nativeRawClients: options.nativeRawClients,
         nativePeriods: options.nativePeriods,
         sourceArchiveSnapshot: options.sourceArchiveSnapshot,
@@ -1455,6 +1457,7 @@ async function collectUsageOnce(options) {
   summary.sessionArchiveSource = {
     fullScan: !anchorUsed,
     presentKeys: Object.keys(allTime.sessions || {}),
+    wslKeys: Object.keys(wslBundle.allTime?.sessions || {}).filter(key => !windowsPeriods.allTime.sessions?.[key]),
     paths: sourcePaths
   };
   // Keep confirmed catalog removals private, like source paths. A missing
@@ -1546,6 +1549,8 @@ async function collectUsageOnce(options) {
       getSessionUsageArchive: options.getSessionUsageArchive,
       sessionUsageArchive: options.sessionUsageArchive,
       sessionUsageArchiveOptions: options.sessionUsageArchiveOptions,
+      wslSessionKeys: summary.sessionArchiveSource.wslKeys,
+      wslPeriods: wslBundle,
       sourceArchiveSnapshot: options.sourceArchiveSnapshot,
       // Unavailable raw attribution is unknown inventory, not a proved empty
       // scan. Preserve that distinction for first ownership and corrections.
@@ -1564,6 +1569,7 @@ async function collectUsageOnce(options) {
           todayKey, timeZone, allTimeSince,
           replaceLive: !anchorUsed, nativePartitions, nativeRawPartitions, nativeRawPresence, nativePeriods: windowsPeriods,
           nativeAnchor: anchorUsed ? anchor : null, clients: normalizedClients,
+          wslPeriods: wslBundle, wslSessionKeys: summary.sessionArchiveSource.wslKeys,
           supplementalPeriods: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
             mergePeriods(wslBundle[name], codexLocalView?.[name] || emptyPeriod())]))
         });
@@ -1601,6 +1607,7 @@ async function collectUsageOnce(options) {
         // scan; only a newly accepted full graph may replace its live rows.
         replaceLive: false,
         nativePeriods: windowsPeriods, nativePartitions, nativeRawPartitions, nativeRawPresence, nativeAnchor: anchorUsed ? anchor : null,
+        wslPeriods: wslBundle, wslSessionKeys: summary.sessionArchiveSource.wslKeys,
         supplementalPeriods: Object.fromEntries(['today', 'month', 'allTime'].map(name => [name,
           mergePeriods(wslBundle[name], codexLocalView?.[name] || emptyPeriod())]))
       });

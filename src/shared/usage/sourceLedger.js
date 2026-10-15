@@ -382,7 +382,7 @@ function captureSourceLedger(value, graphs, options = {}) {
           advanceLegacyBoundary(scope, observedBoundary);
         }
       }
-      else if (!overlaps.length && !unresolvedPeer && options.retainedBoundaryChecked === true && boundary?.hasRetainedUsage) ledger.scopes[scan.id] = {
+      else if (!overlaps.length && healthyLegacyObservation && boundary?.hasRetainedUsage) ledger.scopes[scan.id] = {
         mode: 'legacy', clients: [...new Set([...scan.clients, ...(boundary.clients || [])])].sort(),
         sessions: observedBoundary.sessions || {}, events: {}, observationFrontier: scan.capturedAt, reason,
         legacyDays: observedBoundary.days || {}, ...(observedBoundary.periods ? { legacyPeriods: legacyPeriods(observedBoundary.periods) } : {}),

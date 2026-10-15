@@ -24,6 +24,11 @@ function sourceProjectionClient(value) {
   return client?.startsWith('cc-mirror/') ? 'claude' : client === '9router' ? 'gjc' : client;
 }
 
+function sourceProjectionKey(key) {
+  const separator = key.indexOf(':');
+  return `${sourceProjectionClient(key.slice(0, separator))}:${key.slice(separator + 1)}`;
+}
+
 function observationKey(value) {
   return JSON.stringify([
     sourceProjectionClient(value?.client) || 'unknown',
@@ -286,14 +291,15 @@ function mergeUnresolvedDays(target, source) {
 // Legacy aggregates cannot be proven disjoint by comparing numeric totals.
 // Keep one whole daily observation behind an exclusive boundary until identity
 // evidence can reconcile it; never add it to an event ledger during migration.
-function retainedSessionBoundary(sessionArchive, families) {
+function retainedSessionBoundary(sessionArchive, families, wslKeys = new Set()) {
   const periods = {};
   const sessions = {};
   const days = {};
   const dayPeriods = {};
   const clients = new Set();
-  for (const entry of Object.values(sessionArchive?.sessions || {})) {
+  for (const [archiveKey, entry] of Object.entries(sessionArchive?.sessions || {})) {
     if (!entry || typeof entry !== 'object') continue;
+    if (entry.accountingSource === 'wsl' || wslKeys.has(sourceProjectionKey(archiveKey))) continue;
     const client = sourceProjectionClient(entry.client);
     if (!families.has(client)) continue;
     if (Object.values(entry.periods || {}).some(row => num(row?.totalTokens) > 0 || num(row?.costUsd) > 0)) clients.add(client);
@@ -377,7 +383,7 @@ function legacyBoundary(archive, clients, options = {}) {
       retained[date] = selectLegacyDay(retained[date], day);
     }
   }
-  const generic = retainedSessionBoundary(options.sessionUsageArchive, families);
+  const generic = retainedSessionBoundary(options.sessionUsageArchive, families, new Set((options.wslSessionKeys || []).map(sourceProjectionKey)));
   for (const scope of legacy) {
     for (const [name, candidate] of Object.entries(scope.legacyPeriods)) {
       if (largerLegacyPeriod(candidate, generic.periods[name], name)) generic.periods[name] = candidate;
@@ -403,8 +409,25 @@ function legacyBoundary(archive, clients, options = {}) {
       }
     }
     const native = retainedSessionBoundary({ sessions: entries }, families);
-    for (const [name, candidate] of Object.entries(native.periods)) {
-      if (largerLegacyPeriod(candidate, generic.periods[name], name)) generic.periods[name] = candidate;
+    const absorbed = new Set(legacy.flatMap(scope => Object.keys(scope.sessions)));
+    const hostKeys = new Set(Object.keys(entries).map(sourceProjectionKey));
+    const wslEntries = {};
+    for (const key of options.wslSessionKeys || []) {
+      const canonicalKey = sourceProjectionKey(key);
+      if (!absorbed.has(canonicalKey) || hostKeys.has(canonicalKey)) continue;
+      for (const name of ['today', 'month', 'allTime']) {
+        const session = options.wslPeriods?.[name]?.sessions?.[key];
+        if (!session) continue;
+        const entry = wslEntries[canonicalKey] ||= { client: session.client, sessionId: session.sessionId, periods: {}, periodWindows: {} };
+        entry.periods[name] = session;
+        entry.periodWindows[name] = name === 'today' ? { day: options.todayKey } : name === 'month' ? { month: options.todayKey?.slice(0, 7) } : {};
+      }
+    }
+    // A WSL key already inside an unresolved boundary stays there. Compare
+    // whole current observations; never subtract it from the retained floor.
+    const candidate = retainedSessionBoundary({ sessions: { ...entries, ...wslEntries } }, families);
+    for (const [name, next] of Object.entries(candidate.periods)) {
+      if (largerLegacyPeriod(next, generic.periods[name], name)) generic.periods[name] = next;
     }
     Object.assign(generic.sessions, native.sessions);
     generic.clients = [...new Set([...generic.clients, ...native.clients])];

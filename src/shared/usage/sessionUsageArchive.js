@@ -84,6 +84,7 @@ function isSessionUsageArchiveEntryEvidence(key, entry) {
     || !evidenceRecord(entry) || typeof entry.client !== 'string' || !entry.client.trim()
     || normalizeClientName(entry.client) !== entry.client || typeof entry.sessionId !== 'string' || !entry.sessionId.trim()
     || key !== `${entry.client}:${entry.sessionId}` || !evidenceRecord(entry.periods)) return false;
+  if (entry.accountingSource !== undefined && entry.accountingSource !== 'wsl') return false;
   const names = Object.keys(entry.periods);
   if (!names.length) {
     // Pruning today/month-only entries retains their valid identity/frontier
@@ -155,6 +156,7 @@ function normalizeSessionUsageArchive(value) {
     if (!entry.client || !entry.sessionId || Object.keys(entry.periods).length === 0) continue;
     entry.sourceState = ['present', 'missing', 'unknown'].includes(rawEntry.sourceState)
       ? rawEntry.sourceState : 'unknown';
+    if (rawEntry.accountingSource === 'wsl') entry.accountingSource = 'wsl';
     const sourcePath = ownedSessionSourcePath(rawEntry.sourcePath);
     if (sourcePath) entry.sourcePath = sourcePath;
     else if (entry.sourceState === 'missing') entry.sourceState = 'unknown';
@@ -231,6 +233,7 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
   const source = deviceRecord.sessionArchiveSource;
   const hasSource = source && typeof source === 'object';
   const managedKeys = new Set(source?.managedKeys || []);
+  const wslKeys = new Set((source?.wslKeys || []).filter(key => !managedKeys.has(key)));
   const checkedClients = new Set((source?.boundaryCheckedClients || []).map(normalizeClientName));
   const ownedClients = new Set((source?.ownedClients || []).map(normalizeClientName).filter(client => checkedClients.has(client)));
   const legacyClients = new Set((source?.legacyClients || []).map(normalizeClientName));
@@ -240,6 +243,15 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
       ? (rawPeriod && typeof rawPeriod === 'object' ? rawPeriod : { sessions: {} })
       : periodFor(deviceRecord, periodName)];
   }));
+  // A host claim, including a corrected zero with no visible row, takes the
+  // whole identity. An older supplemental copy must not replay after it.
+  for (const key of managedKeys) {
+    const entry = archive.sessions[key];
+    if (entry?.accountingSource !== 'wsl') continue;
+    const session = scannedPeriods.get('allTime').sessions?.[key]
+      || entry.periods?.allTime || { client: entry.client, sessionId: entry.sessionId };
+    rememberOwnedSessionMetadata(archive, session, key, capturedAtIso, day, month, changedKeys, source?.revokedTitles?.[key]);
+  }
   // A preview cannot turn absence in an unscanned period into a zero reading.
   const fullSourceScan = hasSource && source.fullScan === true && Array.isArray(source.presentKeys)
     && PERIODS.every((name) => hasSummaryPeriod(deviceRecord, name)
@@ -261,7 +273,7 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
         && (!session.sourceState || session.sourceState === 'present')) fullLiveKeys.add(key);
     }
     reconcileSessionSources(archive, scannedPeriods, fullLiveKeys, source, sourceArchivedKeys,
-      captureDate, changedKeys, options, managedKeys, ownedClients);
+      captureDate, changedKeys, options, managedKeys, ownedClients, wslKeys);
   }
   for (const periodName of PERIODS) {
     if (periodName === 'today' && archive.prunedDay && day < archive.prunedDay) continue;
@@ -273,7 +285,7 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
       if (!hasSessionUsage(session) && !(hasSource && periodName === 'today')) continue;
       const archiveKey = sessionKey(session.client, session.sessionId);
       if (!archiveKey) continue;
-      if (ownedClients.has(session.client)) {
+      if (ownedClients.has(session.client) && !wslKeys.has(archiveKey)) {
         // An unresolved legacy boundary is not migration proof. Preserve its
         // original evidence; only a migrated ledger may retire these counters.
         if (!legacyClients.has(session.client)) rememberOwnedSessionMetadata(archive, session, archiveKey, capturedAtIso, day, month, changedKeys, source?.revokedTitles?.[archiveKey]);
@@ -291,6 +303,11 @@ function updateSessionUsageArchive(existingArchive, deviceRecord, capturedAt = n
         sourceState: 'unknown'
       };
       if (Date.parse(entry.sourceObservedAt || '') > captureTime) continue;
+      if (wslKeys.has(archiveKey) && entry.accountingSource !== 'wsl'
+        && newestSessionObservation(entry) <= captureTime) {
+        entry.accountingSource = 'wsl';
+        changedKeys.add(archiveKey);
+      }
       if (hasSource && (source.fullScan === true || periodName === 'today')
         && newestSessionObservation(entry) <= captureTime) {
         observeSessionSource(entry, 'present', source.paths?.[archiveKey], capturedAtIso, changedKeys, archiveKey);
@@ -376,14 +393,15 @@ function newestSessionObservation(entry) {
     ...Object.values(entry?.periodWindows || {}).map((window) => Date.parse(window.capturedAt || '') || 0));
 }
 
-function reconcileSessionSources(archive, periods, liveKeys, source, excludedKeys, capturedAt, changedKeys, options, managedKeys, ownedClients) {
+function reconcileSessionSources(archive, periods, liveKeys, source, excludedKeys, capturedAt, changedKeys, options, managedKeys, ownedClients, wslKeys) {
   const capturedAtIso = capturedAt.toISOString();
   const day = localDay(capturedAt);
   const month = localMonth(capturedAt);
   const rows = new Map(PERIODS.map((name) => [name, new Map(Object.values(periods.get(name).sessions || {})
     .map((row) => [sessionKey(row.client, row.sessionId), row]))]));
   for (const key of new Set([...Object.keys(archive.sessions), ...liveKeys])) {
-    if (excludedKeys.has(key) || ownedClients.has(key.slice(0, key.indexOf(':')))) continue;
+    if (excludedKeys.has(key) || ownedClients.has(key.slice(0, key.indexOf(':')))
+      && archive.sessions[key]?.accountingSource !== 'wsl' && !wslKeys.has(key)) continue;
     let entry = archive.sessions[key];
     if (newestSessionObservation(entry) > capturedAt.getTime()) continue;
     if (!liveKeys.has(key)) {
@@ -400,6 +418,10 @@ function reconcileSessionSources(archive, periods, liveKeys, source, excludedKey
       client: key.slice(0, separator), sessionId: key.slice(separator + 1),
       capturedAt: capturedAtIso, day, month, periodWindows: {}, periods: {}
     };
+    if (wslKeys.has(key) && entry.accountingSource !== 'wsl') {
+      entry.accountingSource = 'wsl';
+      changedKeys.add(key);
+    }
     observeSessionSource(entry, 'present', source.paths?.[key], capturedAtIso, changedKeys, key);
     for (const periodName of PERIODS) {
       if (periodName === 'today' && archive.prunedDay && day < archive.prunedDay) continue;
@@ -658,7 +680,7 @@ function applySessionUsageArchive(summary, archive, options = {}) {
   const mergedRows = [];
   for (const [archiveKey, entry] of Object.entries(normalizedArchive.sessions)) {
     // The source/day projection already owns this ID, including a zero period.
-    if (managedKeys.has(archiveKey) || ownedClients.has(entry.client)) continue;
+    if (managedKeys.has(archiveKey) || ownedClients.has(entry.client) && entry.accountingSource !== 'wsl') continue;
     for (const periodName of PERIODS) {
       const session = entry.periods?.[periodName];
       if (!session || !hasSessionUsage(session) || !shouldApplyPeriod(periodName, entry, now)) continue;

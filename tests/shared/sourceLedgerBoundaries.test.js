@@ -72,7 +72,7 @@ function assertCounters(result, expected) {
 function runtime(t, clients) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'source-boundaries-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { clients, allTimeSince: '2026-01-01', deviceId: 'boundary-fixture', homeDir: dir, env: {},
+  return { clients, allTimeSince: '2026-01-01', deviceId: 'boundary-fixture', homeDir: dir, env: {}, osInfo: {},
     wslScanEnabled: false, projectsEnabled: false, codexLocalUsageEnabled: false,
     includeHistory: true, dailyHistoryArchiveEnabled: true, getSessionUsageArchive: emptyArchive,
     dailyHistoryArchiveOptions: { path: path.join(dir, 'daily.json') },
@@ -249,7 +249,8 @@ function pricedLegacyFixture(entries) {
   const sampleEvents = fixture.input.sourceUsage.sessions[0].events;
   fixture.input = graph(clients.map(client => row(client, 'new', 25, 'priced-domain')));
   fixture.input.contributions = [];
-  for (const session of fixture.input.sourceUsage.sessions) session.events = structuredClone(sampleEvents);
+  for (const session of fixture.input.sourceUsage.sessions) session.events = structuredClone(sampleEvents)
+    .map(event => ({ ...event, id: `${session.client}:${event.id}` }));
   const period = tokens => extractUsageFromTokscale({ entries: clients.map(client => ({
     client, sessionId: 'new', model: 'new-model', input: tokens, cost: tokens / 10 })) });
   fixture.options.nativePeriods = { today: period(5), month: period(25), allTime: period(25) };
