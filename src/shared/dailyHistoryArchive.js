@@ -1049,13 +1049,27 @@ function archiveWriteEnabled(options = {}) {
 
 function retainDailyHistory(graphs, options = {}) {
   const previous = readDailyHistoryArchive(options);
+  let committedArchive = previous;
   const pendingLocks = new Set((options.sourceArchiveSnapshot?.scopes || [])
     .filter(scope => scope.blockNativeWatch === true).map(scope => scope.id));
+  const priorScopes = new Map((options.sourceArchiveSnapshot?.scopes || []).map(scope => [scope.id, scope]));
+  const knownHealthy = (id, scope) => {
+    const prior = priorScopes.get(id);
+    // Prior watch eligibility survives a timeout, but cannot grant replacement
+    // authority or override a newer disk observation/lock.
+    return prior && prior.blockNativeWatch !== true && prior.mode === scope.mode
+      && isDeepStrictEqual(prior.clients, scope.clients)
+      && Boolean(prior.acceptedAt || prior.observationFrontier)
+      && prior.acceptedAt === scope.acceptedAt && prior.observationFrontier === scope.observationFrontier;
+  };
   const lockArchive = (archive) => {
-    if (!options.sourceGraphUnavailable && !pendingLocks.size) return archive;
+    for (const [id, scope] of Object.entries(archive.sourceLedger?.scopes || {})) {
+      if (scope.blockNativeWatch || options.sourceGraphUnavailable && !knownHealthy(id, scope)) pendingLocks.add(id);
+    }
+    if (!pendingLocks.size) return archive;
     const locked = normalizeDailyHistoryArchive(structuredClone(archive));
     for (const [id, scope] of Object.entries(locked.sourceLedger?.scopes || {})) {
-      if (options.sourceGraphUnavailable || pendingLocks.has(id)) scope.blockNativeWatch = true;
+      if (pendingLocks.has(id)) scope.blockNativeWatch = true;
     }
     return locked;
   };
@@ -1077,6 +1091,7 @@ function retainDailyHistory(graphs, options = {}) {
     // shared archive. Rebase on the latest file immediately before writing so
     // this scan cannot put that newer observation back on disk.
     const latest = readDailyHistoryArchive({ ...options, fresh: true });
+    committedArchive = latest;
     next = capture(latest);
     if (archiveWriteEnabled(options) && requiresWrite(latest, next)) {
       try {
@@ -1097,7 +1112,7 @@ function retainDailyHistory(graphs, options = {}) {
   }
   // A complete reread of identical accounting must still commit before it can
   // release a process-local rejection lock. A disabled writer grants no release.
-  if (!committed && releasesWatchLock(next)) next = lockArchive(previous);
+  if (!committed && releasesWatchLock(next)) next = lockArchive(committedArchive);
   return graphFromDailyHistoryArchive([], next, { ...options, canonical: true });
 }
 

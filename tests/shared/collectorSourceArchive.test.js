@@ -40,7 +40,7 @@ function optionsFor(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'collector-source-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return { clients: 'claude', allTimeSince: '2026-01-01', deviceId: 'source-fixture',
-    homeDir: dir, env: {}, wslScanEnabled: false, projectsEnabled: false,
+    homeDir: dir, env: {}, osInfo: {}, wslScanEnabled: false, projectsEnabled: false,
     codexLocalUsageEnabled: false, includeHistory: true, dailyHistoryArchiveEnabled: true,
     getSessionUsageArchive: () => ({ version: 1, sessions: {} }),
     dailyHistoryArchiveOptions: { path: path.join(dir, 'daily.json') },
@@ -163,19 +163,21 @@ function anchorFrom(captured, now) {
 }
 
 for (const failure of ['throw', 'no-source', 'stale']) {
-  test(`${failure} graph preserves accepted source accounting and watch retains its exact native delta`, async t => {
+  for (const knownHealthy of [true, false]) test(`${failure} graph preserves accepted accounting; healthy snapshot=${knownHealthy}`, async t => {
     const options = optionsFor(t);
     const now = new Date(2026, 9, 11, 12);
     const date = localTodayKey(now);
+    let previous;
     await collectUsageOnce({ ...options, now,
       runTokscale: async () => ({ entries: [nativeRow('a', 100), nativeRow('gone', 20)] }),
       runGraph: async () => sourceGraph(now, ['a', 'gone'].map(sessionId => ({ client: 'claude', sessionId,
-        days: [contribution(date, sessionId === 'a' ? 100 : 20)] }))) });
+        days: [contribution(date, sessionId === 'a' ? 100 : 20)] }))),
+      onSourceArchiveComputed: value => { previous = value; } });
     const later = new Date(now.getTime() + 60000);
     let captured;
     let cached;
     const rows = [nativeRow('a', 400), nativeRow('b', 50)];
-    const summary = await collectUsageOnce({ ...options, now: later,
+    const summary = await collectUsageOnce({ ...options, now: later, sourceArchiveSnapshot: knownHealthy ? previous : undefined,
       runTokscale: async () => ({ entries: rows }),
       runGraph: async () => {
         if (failure === 'throw') throw new Error('graph timeout');
@@ -185,6 +187,8 @@ for (const failure of ['throw', 'no-source', 'stale']) {
       onAnchorComputed: value => { captured = value; },
       onSourceArchiveComputed: value => { cached = value; }
     });
+    const locked = failure === 'throw' && !knownHealthy;
+    assert.equal(cached.scopes[0].blockNativeWatch === true, locked);
     for (const name of ['today', 'month', 'allTime']) {
       assert.equal(summary[name].totalTokens, 120);
       assert.equal(summary[name].sessions['claude:a'].totalTokens, 100);
@@ -198,9 +202,22 @@ for (const failure of ['throw', 'no-source', 'stale']) {
       const watch = await collectUsageOnce({ ...options, now: later, includeHistory: false,
         sourceArchiveSnapshot: cached, todayOnlyAnchor: anchorFrom(captured, later),
         runTokscale: async () => ({ entries: [nativeRow('a', 410), nativeRow('b', 50)] }) });
-      assert.equal(watch.today.totalTokens, 480);
-      assert.equal(watch.allTime.totalTokens, 480);
+      assert.equal(watch.today.totalTokens, locked ? 120 : 480);
+      assert.equal(watch.allTime.totalTokens, locked ? 120 : 480);
     }
+    const recoveredAt = new Date(later.getTime() + 1000);
+    const recovered = await collectUsageOnce({ ...options, now: recoveredAt, sourceArchiveSnapshot: cached,
+      runTokscale: async () => ({ entries: [nativeRow('a', 410), nativeRow('b', 50)] }),
+      runGraph: async () => sourceGraph(recoveredAt, [
+        { client: 'claude', sessionId: 'a', days: [contribution(date, 410)] },
+        { client: 'claude', sessionId: 'b', days: [contribution(date, 50)] }
+      ]), onAnchorComputed: value => { captured = value; }, onSourceArchiveComputed: value => { cached = value; } });
+    assert.equal(recovered.allTime.totalTokens, 480);
+    assert.notEqual(cached.scopes[0].blockNativeWatch, true);
+    const growing = await collectUsageOnce({ ...options, now: recoveredAt, includeHistory: false,
+      sourceArchiveSnapshot: cached, todayOnlyAnchor: anchorFrom(captured, recoveredAt),
+      runTokscale: async () => ({ entries: [nativeRow('a', 420), nativeRow('b', 50)] }) });
+    assert.equal(growing.allTime.totalTokens, 490);
   });
 }
 
@@ -562,21 +579,25 @@ test('a returning raw alias adds its past days even when a canonical sibling was
 });
 
 for (const graphSucceeds of [true, false]) {
-  test(`prior-day omitted source rows survive midnight (graph succeeds: ${graphSucceeds})`, async t => {
+  for (const knownHealthy of [true, false]) test(`prior-day omitted rows survive midnight; graph=${graphSucceeds}, healthy snapshot=${knownHealthy}`, async t => {
     const options = optionsFor(t);
     const yesterday = new Date(2026, 9, 10, 12);
     const now = new Date(2026, 9, 11, 12);
     const yesterdayKey = localTodayKey(yesterday);
+    let previous;
     await collectUsageOnce({ ...options, now: yesterday,
       runTokscale: async () => ({ entries: [nativeRow('a', 100)] }),
-      runGraph: async () => sourceGraph(yesterday, [{ client: 'claude', sessionId: 'a', days: [contribution(yesterdayKey, 100)] }]) });
+      runGraph: async () => sourceGraph(yesterday, [{ client: 'claude', sessionId: 'a', days: [contribution(yesterdayKey, 100)] }]),
+      onSourceArchiveComputed: value => { previous = value; } });
     let captured;
     let cached;
-    const full = await collectUsageOnce({ ...options, now,
+    const full = await collectUsageOnce({ ...options, now, sourceArchiveSnapshot: knownHealthy ? previous : undefined,
       runTokscale: async () => ({ entries: [] }), runGraph: async () => {
         if (!graphSucceeds) throw new Error('graph failed after midnight');
         return sourceGraph(now, []);
       }, onAnchorComputed: value => { captured = value; }, onSourceArchiveComputed: value => { cached = value; } });
+    const locked = !graphSucceeds && !knownHealthy;
+    assert.equal(cached.scopes[0].blockNativeWatch === true, locked);
     assert.equal(cached.sessions[0].days[0].date, yesterdayKey, 'omission preserves the timestamped contribution');
     assert.equal(cached.scopes[0].acceptedAt, (graphSucceeds ? now : yesterday).toISOString());
     assert.equal(full.history.summary.totalTokens, 100);
@@ -594,10 +615,24 @@ for (const graphSucceeds of [true, false]) {
       assert.equal(retained.allTime.totalTokens, 100);
       const watch = await collectUsageOnce({ ...options, now, includeHistory: false, sourceArchiveSnapshot,
         todayOnlyAnchor: anchorFrom(captured, now), runTokscale: async () => ({ entries: [nativeRow('a', 5)] }) });
-      assert.equal(watch.today.totalTokens, 5);
-      assert.equal(watch.month.totalTokens, 105);
-      assert.equal(watch.allTime.totalTokens, 105);
+      assert.equal(watch.today.totalTokens, locked ? 0 : 5);
+      assert.equal(watch.month.totalTokens, locked ? 100 : 105);
+      assert.equal(watch.allTime.totalTokens, locked ? 100 : 105);
     }
+    const recoveredAt = new Date(now.getTime() + 1000);
+    const recovered = await collectUsageOnce({ ...options, now: recoveredAt, sourceArchiveSnapshot: cached,
+      runTokscale: async ({ flags }) => ({ entries: [nativeRow('a', flags.includes('--today') ? 5 : 105)] }),
+      runGraph: async () => sourceGraph(recoveredAt, [{ client: 'claude', sessionId: 'a',
+        days: [contribution(yesterdayKey, 100), contribution(localTodayKey(now), 5)] }]),
+      onAnchorComputed: value => { captured = value; }, onSourceArchiveComputed: value => { cached = value; } });
+    assert.equal(recovered.today.totalTokens, 5);
+    assert.equal(recovered.allTime.totalTokens, 105);
+    assert.notEqual(cached.scopes[0].blockNativeWatch, true);
+    const growing = await collectUsageOnce({ ...options, now: recoveredAt, includeHistory: false,
+      sourceArchiveSnapshot: cached, todayOnlyAnchor: anchorFrom(captured, recoveredAt),
+      runTokscale: async () => ({ entries: [nativeRow('a', 6)] }) });
+    assert.equal(growing.today.totalTokens, 6);
+    assert.equal(growing.allTime.totalTokens, 106);
   });
 }
 

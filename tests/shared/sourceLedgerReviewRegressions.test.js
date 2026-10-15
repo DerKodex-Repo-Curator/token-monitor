@@ -16,6 +16,7 @@ const { applySessionUsageArchive, isSessionUsageArchiveEvidence } = require('../
 const { createSessionUsageArchiveStore } = require('../../src/shared/usage/sessionUsageArchiveStore');
 const { createUsageTransform } = require('../../src/shared/usage/usageTransform');
 const { captureArchivedClientUsage } = require('../../src/shared/usage/clientUsageArchive');
+const { retainDailyHistory } = require('../../src/shared/dailyHistoryArchive');
 
 const now = new Date(2026, 9, 13, 12);
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -369,4 +370,111 @@ test('an identical healthy revision releases a failed-write lock only after a su
   input = 50;
   const watch = await collectUsageOnce({ ...options, includeHistory: false, sourceArchiveSnapshot: projection });
   assert.equal(watch.allTime.totalTokens, 50);
+});
+
+test('restart with a locked disk scope requires a successful commit even without a prior snapshot', async t => {
+  const f = fixture(t);
+  let projection;
+  const options = { ...f.options, runTokscale: async () => native([row('A', 45)]),
+    runGraph: async () => graph([row('A', 45)]),
+    onSourceArchiveComputed: value => { projection = value; } };
+  await collectUsageOnce(options);
+  await collectUsageOnce({ ...options, sourceArchiveSnapshot: undefined,
+    runGraph: async () => { throw new Error('offline graph unavailable'); } });
+  assert.equal(projection.scopes[0].blockNativeWatch, true);
+  const committed = fs.readFileSync(f.options.dailyHistoryArchiveOptions.path);
+  let writable = false, input = 45;
+  const updates = [], scans = [];
+  const runtime = startCollector({ ...options, includeHistory: undefined,
+    watchEnabled: false, sessionActivityPolling: false, anchorPersistenceEnabled: false, intervalMs: 3600000,
+    dailyHistoryArchiveWriteEnabled: () => writable,
+    runTokscale: async ({ flags }) => { scans.push(flags); return native([row('A', input)]); },
+    onUpdate: value => updates.push(value) });
+  try {
+    await runtime.whenIdle();
+    assert.equal(updates.at(-1).allTime.totalTokens, 45);
+    assert.equal(JSON.parse(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path)).sourceLedger.scopes.codex.blockNativeWatch, true);
+    assert.deepEqual(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path), committed);
+    input = 15; scans.length = 0;
+    await runtime.tick('watch:fixture', { todayOnly: true });
+    assert.deepEqual(scans, [['--today']]);
+    assert.equal(updates.at(-1).allTime.totalTokens, 45);
+    writable = true; input = 45;
+    await runtime.tick('manual', { forceHistory: true });
+    assert.notEqual(JSON.parse(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path)).sourceLedger.scopes.codex.blockNativeWatch, true);
+    input = 50; scans.length = 0;
+    await runtime.tick('watch:fixture', { todayOnly: true });
+    assert.deepEqual(scans, [['--today']]);
+    assert.equal(updates.at(-1).allTime.totalTokens, 50);
+  } finally { runtime.stop(); await runtime.whenIdle(); }
+});
+
+test('a locked fresh disk reread also requires a commit before releasing a scope', () => {
+  const archive = captureDailyHistoryArchive({}, graph([row('A', 45)]),
+    { todayKey: day(now), timeZone: zone, sessionUsageArchive: { version: 1, sessions: {} } });
+  const locked = structuredClone(archive);
+  locked.sourceLedger.scopes.codex.blockNativeWatch = true;
+  let reads = 0;
+  const result = retainDailyHistory(graph([row('A', 20)], new Date(now.getTime() + 1000)), {
+    todayKey: day(now), timeZone: zone, sessionUsageArchive: { version: 1, sessions: {} },
+    sourceArchiveSnapshot: graphFromDailyHistoryArchive([], archive, { timeZone: zone }).sourceUsage,
+    readJson: () => ++reads === 1 ? structuredClone(archive) : structuredClone(locked),
+    writeEnabled: () => reads < 2,
+    writeJsonAtomic: () => assert.fail('the guard disables writes after the fresh reread')
+  });
+  assert.equal(reads, 2);
+  assert.equal(result.sourceUsage.scopes[0].blockNativeWatch, true);
+  const summary = periods([row('A', 15)]);
+  applySourceDailyUsage(summary, result.sourceUsage, { todayKey: day(now), timeZone: zone, replaceLive: false });
+  assert.equal(summary.allTime.totalTokens, 45, 'retain the latest committed accounting, not the uncommitted20');
+});
+
+test('a healthy collector timeout keeps its native watch growth without granting graph replacement', async t => {
+  const f = fixture(t);
+  let clock = now, input = 45, unavailable = false;
+  const updates = [], scans = [];
+  const runtime = startCollector({ ...f.options, now: () => clock, includeHistory: undefined,
+    watchEnabled: false, sessionActivityPolling: false, anchorPersistenceEnabled: false, intervalMs: 3600000,
+    runTokscale: async ({ flags }) => { scans.push(flags); return native([row('A', input)]); },
+    runGraph: async () => {
+      if (unavailable) throw new Error('offline graph unavailable');
+      return graph([row('A', input)], clock);
+    }, onUpdate: value => updates.push(value) });
+  try {
+    await runtime.whenIdle();
+    const committed = fs.readFileSync(f.options.dailyHistoryArchiveOptions.path);
+    unavailable = true;
+    for (const growth of [50, 55]) {
+      clock = new Date(clock.getTime() + 1000); input = growth;
+      await runtime.tick('manual', { forceHistory: true });
+      assert.equal(updates.at(-1).allTime.totalTokens, 45, 'timeout supplies no replacement authority');
+      assert.deepEqual(fs.readFileSync(f.options.dailyHistoryArchiveOptions.path), committed);
+      scans.length = 0;
+      await runtime.tick('watch:fixture', { todayOnly: true });
+      assert.deepEqual(scans, [['--today']]);
+      assert.equal(updates.at(-1).allTime.totalTokens, growth, 'previous healthy scope keeps watch eligibility');
+    }
+    unavailable = false; clock = new Date(clock.getTime() + 1000); input = 15;
+    await runtime.tick('manual', { forceHistory: true });
+    assert.equal(updates.at(-1).allTime.totalTokens, 15);
+    input = 20;
+    await runtime.tick('watch:fixture', { todayOnly: true });
+    assert.equal(updates.at(-1).allTime.totalTokens, 20);
+  } finally { runtime.stop(); await runtime.whenIdle(); }
+});
+
+for (const changed of ['accepted revision', 'observation frontier']) test(`prior healthy snapshot cannot bypass a newer disk ${changed}`, () => {
+  const options = { todayKey: day(now), timeZone: zone, sessionUsageArchive: { version: 1, sessions: {} } };
+  const archive = captureDailyHistoryArchive({}, graph([row('A', 45)]), options);
+  const previous = graphFromDailyHistoryArchive([], archive, options).sourceUsage;
+  const clock = new Date(now.getTime() + 1000);
+  const latest = captureDailyHistoryArchive(archive, changed === 'accepted revision' ? graph([row('A', 20)], clock)
+    : { contributions: [], meta: { generatedAt: clock.toISOString() } }, options);
+  assert.notEqual(latest.sourceLedger.scopes.codex.blockNativeWatch, true);
+  const result = retainDailyHistory([], { ...options, readJson: () => structuredClone(latest),
+    sourceArchiveSnapshot: previous, sourceGraphUnavailable: true, writeEnabled: false });
+  assert.equal(result.sourceUsage.scopes[0].blockNativeWatch, true);
+  const output = periods([row('A', 15)]);
+  applySourceDailyUsage(output, result.sourceUsage, { ...options, replaceLive: false });
+  assert.equal(output.allTime.totalTokens, changed === 'accepted revision' ? 20 : 45);
 });
