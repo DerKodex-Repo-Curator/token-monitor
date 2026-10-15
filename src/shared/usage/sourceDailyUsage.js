@@ -140,7 +140,9 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
   if (sourceUsage.bucketTimezone !== timeZone) sourceUsage = rebucketSourceUsage(sourceUsage, timeZone);
   const full = options.replaceLive !== false && !options.nativeAnchor;
   const snapshots = sourceUsage.sessions.filter(row => rawOwners.has(row.client));
-  const lockedRawOwners = new Set(sourceUsage.scopes.filter(scope => scope.blockNativeWatch === true).flatMap(scope => scope.clients));
+  const selectedScopes = sourceUsage.scopes.filter(scope => scope.clients.some(client => rawOwners.has(client)));
+  const selectedAggregates = (sourceUsage.aggregates || []).filter(day => selectedScopes.some(scope => scope.id === day.scopeId));
+  const lockedRawOwners = new Set(selectedScopes.filter(scope => scope.blockNativeWatch === true).flatMap(scope => scope.clients));
   const lockedOwners = new Set([...lockedRawOwners].map(normalizeClientName));
   const legacyPeriodIds = new Set((sourceUsage.legacyPeriods || []).map(boundary => boundary.scopeId));
   const nativeLegacyRaw = new Set(sourceUsage.scopes.filter(scope => scope.mode === 'legacy'
@@ -173,7 +175,7 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
         || name === 'month' && window.month === today.slice(0, 7)) ? structuredClone(window.period) : emptyPeriod();
       const nativeToday = !full && boundary.clients.some(client => nativeLegacyRaw.has(client))
         ? mergePeriods(...onlyClients(nativeTodayPeriod, boundaryOwners)) : null;
-      const allocated = aggregatePeriod((sourceUsage.aggregates || []).filter(day => day.scopeId === boundary.scopeId), name, today, since, nativeToday);
+      const allocated = aggregatePeriod(selectedAggregates.filter(day => day.scopeId === boundary.scopeId), name, today, since, nativeToday);
       // These are overlapping observations of one legacy boundary, not an
       // inferred additive union. Undated allTime never creates a daily bucket.
       let selectedPeriod = largerLegacyPeriod({ period: allocated }, { period }, 'allTime') ? allocated : period;
@@ -249,7 +251,7 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
       }
       if (rawPartitions && options.nativeRawPresence) options.nativeRawPresence[name] = Object.entries(rawPartitions)
         .flatMap(([raw, period]) => Object.values(period.sessions || {}).map(row => `${raw}:${row.sessionId}`));
-      const aggregate = aggregatePeriod((sourceUsage.aggregates || []).filter(day => !legacyPeriodScopes.has(day.scopeId)), name, today, since);
+      const aggregate = aggregatePeriod(selectedAggregates.filter(day => !legacyPeriodScopes.has(day.scopeId)), name, today, since);
       const displayNative = nativeLegacyRaw.size
         ? mergePeriods(...fallbackUntouched(acceptedNative, new Set([...nativeLegacyRaw].map(normalizeClientName)))) : acceptedNative;
       summary[name] = mergePeriods(displayNative, ...retained, aggregate, options.supplementalPeriods?.[name] || emptyPeriod());
@@ -259,8 +261,8 @@ function applySourceDailyUsage(summary, sourceUsage, options = {}) {
       // be added to retained accepted counters as if it were another source.
       if (replacedOwners.size) replacedOwners.add(UNATTRIBUTED_USAGE_CLIENT);
       const base = replacedOwners.size ? mergePeriods(...fallbackUntouched(native, replacedOwners)) : native;
-      const aggregate = aggregatePeriod((sourceUsage.aggregates || []).filter(day => !legacyPeriodScopes.has(day.scopeId)
-        && (sourceUsage.scopes || []).some(scope => scope.id === day.scopeId && scope.blockNativeWatch)), name, today, since);
+      const aggregate = aggregatePeriod(selectedAggregates.filter(day => !legacyPeriodScopes.has(day.scopeId)
+        && selectedScopes.some(scope => scope.id === day.scopeId && scope.blockNativeWatch)), name, today, since);
       summary[name] = mergePeriods(base, ...observed.map(row => row.period), ...retained, aggregate, options.supplementalPeriods?.[name] || emptyPeriod());
     }
   }

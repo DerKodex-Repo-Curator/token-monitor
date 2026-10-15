@@ -1053,25 +1053,70 @@ function archiveWriteEnabled(options = {}) {
 
 function retainDailyHistory(graphs, options = {}) {
   const previous = readDailyHistoryArchive(options);
+  let committedArchive = previous;
+  const pendingLocks = new Set((options.sourceArchiveSnapshot?.scopes || [])
+    .filter(scope => scope.blockNativeWatch === true).map(scope => scope.id));
+  const priorScopes = new Map((options.sourceArchiveSnapshot?.scopes || []).map(scope => [scope.id, scope]));
+  const knownHealthy = (id, scope) => {
+    const prior = priorScopes.get(id);
+    // Prior watch eligibility survives a timeout, but cannot grant replacement
+    // authority or override a newer disk observation/lock.
+    return prior && prior.blockNativeWatch !== true && prior.mode === scope.mode
+      && isDeepStrictEqual(prior.clients, scope.clients)
+      && Boolean(prior.acceptedAt || prior.observationFrontier)
+      && prior.acceptedAt === scope.acceptedAt && prior.observationFrontier === scope.observationFrontier;
+  };
+  const lockArchive = (archive) => {
+    for (const [id, scope] of Object.entries(archive.sourceLedger?.scopes || {})) {
+      if (scope.blockNativeWatch || options.sourceGraphUnavailable && !knownHealthy(id, scope)) pendingLocks.add(id);
+    }
+    if (!pendingLocks.size) return archive;
+    const locked = normalizeDailyHistoryArchive(structuredClone(archive));
+    for (const [id, scope] of Object.entries(locked.sourceLedger?.scopes || {})) {
+      if (pendingLocks.has(id)) scope.blockNativeWatch = true;
+    }
+    return locked;
+  };
+  const releasesWatchLock = archive => [...pendingLocks].some(id =>
+    archive.sourceLedger?.scopes[id] && !archive.sourceLedger.scopes[id].blockNativeWatch);
+  const requiresWrite = (before, after) => !isDeepStrictEqual(before, after) || releasesWatchLock(after);
   // Only persisted aggregates can establish a legacy migration boundary.
   // This tick's transient native Today overlay is folded after acceptance.
   const capture = (archive) => mergeLiveDaysIntoArchive(
-    captureDailyHistoryArchive(archive, graphs, options), options.liveDays
+    captureDailyHistoryArchive(lockArchive(archive), graphs, options), options.liveDays
   );
   let next = capture(previous);
+  let committed = false;
   // Ownership can change while a graph scan is running (for example, a
   // headless agent starts after Electron's collector tick begins). Resolve a
   // lazy guard immediately before the write instead of freezing it at startup.
-  if (archiveWriteEnabled(options) && !isDeepStrictEqual(previous, next)) {
+  if (archiveWriteEnabled(options) && requiresWrite(previous, next)) {
     // The graph scan can take long enough for the other collector to update the
     // shared archive. Rebase on the latest file immediately before writing so
     // this scan cannot put that newer observation back on disk.
     const latest = readDailyHistoryArchive({ ...options, fresh: true });
+    committedArchive = latest;
     next = capture(latest);
-    if (archiveWriteEnabled(options) && !isDeepStrictEqual(latest, next)) {
-      writeDailyHistoryArchive(next, options);
+    if (archiveWriteEnabled(options) && requiresWrite(latest, next)) {
+      try {
+        writeDailyHistoryArchive(next, options);
+        committed = true;
+      } catch (error) {
+        // A failed commit grants no new authority. Keep committed accounting,
+        // with in-memory watch locks until a later full scan can commit again.
+        const committed = normalizeDailyHistoryArchive(structuredClone(latest));
+        const scopes = Object.values(committed.sourceLedger?.scopes || {});
+        if (scopes.length) {
+          for (const scope of scopes) scope.blockNativeWatch = true;
+          error.retainedGraph = graphFromDailyHistoryArchive([], committed, { ...options, canonical: true });
+        }
+        throw error;
+      }
     }
   }
+  // A complete reread of identical accounting must still commit before it can
+  // release a process-local rejection lock. A disabled writer grants no release.
+  if (!committed && releasesWatchLock(next)) next = lockArchive(committedArchive);
   return graphFromDailyHistoryArchive([], next, { ...options, canonical: true });
 }
 

@@ -83,6 +83,7 @@ const {
   createSelfSyncThrottle,
   createSourceSyncQueue,
   mergeSelfSyncSelection,
+  selfSyncSelected,
   SELF_SYNC_KINDS
 } = require('./selfSyncThrottle');
 const {
@@ -1011,6 +1012,8 @@ async function collectHistoryOnce(options) {
         sessionUsageArchive,
         nativeRawClients: options.nativeRawClients,
         nativePeriods: options.nativePeriods,
+        sourceArchiveSnapshot: options.sourceArchiveSnapshot,
+        sourceGraphUnavailable: failureCode === 'history-graph-failed',
         liveDays: options.dailyHistoryLiveDays,
         pricingRevision: options.pricingRevision,
         customPricingActive: options.customPricingActive,
@@ -1028,6 +1031,12 @@ async function collectHistoryOnce(options) {
     } catch (error) {
       failureCode = failureCode || 'daily-history-archive-failed';
       if (typeof options.logger === 'function') options.logger(`daily history archive failed: ${error.message}`);
+      if (error.retainedGraph) {
+        const retained = normalizeHistory(parseGraphResult(error.retainedGraph), { capDays, todayKey });
+        options.onRetainedSourceUsage?.(error.retainedGraph.sourceUsage);
+        reportStatus(false);
+        return withLocalHistory(retained.daily.length || retained.monthly.length ? retained : null);
+      }
     }
   }
   if (!liveHistory) {
@@ -1262,6 +1271,7 @@ async function collectUsageOnce(options) {
     const syncClients = targetRequested ? targetClientsCsv : normalizedClients;
     await maybeSyncCursor(syncClients, options.logger, {
       minIntervalMs: selfSyncThrottle.minIntervalForTick(options, 'cursor'),
+      explicit: selfSyncSelected(options.forceSelfSync, 'cursor'),
       signal: options.signal,
       timeoutMs: options.selfSyncTimeoutMs,
       terminationOptions: options.subprocessTerminationOptions,
@@ -1699,6 +1709,7 @@ async function collectUsageOnce(options) {
       getSessionUsageArchive: options.getSessionUsageArchive,
       sessionUsageArchive: options.sessionUsageArchive,
       sessionUsageArchiveOptions: options.sessionUsageArchiveOptions,
+      sourceArchiveSnapshot: options.sourceArchiveSnapshot,
       // Unavailable raw attribution is unknown inventory, not a proved empty
       // scan. Preserve that distinction for first ownership and corrections.
       nativeRawClients: Object.values(nativeRawPartitions).some(partitions => partitions === null) ? null
@@ -2144,6 +2155,7 @@ const UNSLOTH_DB_WATCH_PATTERN = /^studio\.db(?:-(?:wal|shm))?$/;
 // get a watcher or a health check, which matches where the product actually
 // installs. The acp-events roots stay recursive event trees.
 const DEVIN_CLI_DB_WATCH_PATTERN = /^sessions\.db(?:-(?:wal|shm))?$/;
+const GOOSE_DB_WATCH_PATTERN = /^sessions\.db(?:-(?:wal|shm))?$/;
 const GROK_UNIFIED_LOG_FILE = 'unified.jsonl';
 // Tokscale scans only these two CodeBuddy extension log subtrees. Keep their
 // recursive layout intact, but prune unrelated siblings under Logs before
@@ -2378,6 +2390,7 @@ function watchPolicyEntries(clientsCsv, options = {}) {
   // Tokscale reads only direct children of each MiMo root, so log/* and every
   // other recursive subtree is pruned before chokidar descends into it.
   bound('mimo', candidates.mimo || [], directChildOnly((name) => MIMO_DB_WATCH_PATTERN.test(name)));
+  bound('goose', candidates.goose || [], directChildOnly((name) => GOOSE_DB_WATCH_PATTERN.test(name)));
   bound('cherrystudio', withBasename('cherrystudio', 'Data'), directChildOnly((name) => CHERRY_STUDIO_DB_WATCH_PATTERN.test(name)));
   bound('catpaw', candidates.catpaw || [], directChildOnly((name) => catpawDatabaseName(name.replace(/-(?:wal|shm)$/, ''))));
   bound('unsloth', candidates.unsloth || [], directChildOnly((name) => UNSLOTH_DB_WATCH_PATTERN.test(name)));
@@ -2967,9 +2980,9 @@ function watcherOptions(usePolling, ignored) {
 // its -wal, so a genuine change still produces an event; a client whose scan was
 // measured NOT to rewrite its sidecar (mimo) is deliberately absent here, and
 // adding a client to this list asserts a measurement rather than a hunch.
-// Cherry Studio and CatPaw also rewrite their wal-index on repeated read-only WAL scans.
+// Cherry Studio, CatPaw and Goose also rewrite their wal-index on repeated read-only WAL scans.
 // Cursor's read-only desktop credential/title queries change state.vscdb-shm too.
-const SELF_WATCHED_SQLITE_SIDECAR_CLIENTS = Object.freeze(['antigravity', 'catpaw', 'cherrystudio', 'cursor', 'qodercn', 'zcode']);
+const SELF_WATCHED_SQLITE_SIDECAR_CLIENTS = Object.freeze(['antigravity', 'catpaw', 'cherrystudio', 'cursor', 'goose', 'qodercn', 'zcode']);
 
 function isSelfWatchSqliteSidecarEvent(filePath, rootsByClient = {}) {
   // Match SQLite's wal-index suffix, not one client's database basename: ZCode's
