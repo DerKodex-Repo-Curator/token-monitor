@@ -53,7 +53,7 @@ struct WidgetLimitsView: View {
                 )
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(LocalizedStringKey(secondary.label))
+                        Text(verbatim: secondary.label)
                             .foregroundStyle(ink.secondary)
                         Spacer(minLength: 4)
                         Text(verbatim: column.shortValueText)
@@ -87,7 +87,7 @@ struct WidgetLimitsView: View {
                             column
                         } else {
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(LocalizedStringKey(window.label))
+                                Text(verbatim: window.label)
                                     .font(.caption)
                                     .foregroundStyle(ink.secondary)
                                     .lineLimit(1)
@@ -257,7 +257,7 @@ struct WidgetLimitsView: View {
 
     /// `Session · 1h 30m` — window label plus its reset countdown.
     private func labelWithReset(_ window: TokenMonitorSharedPayload.LimitWindow) -> String {
-        let label = String(localized: String.LocalizationValue(window.label), locale: entry.locale)
+        let label = window.label
         guard entry.preferences.widgetShowsResetTime, let resetAt = window.resetAt else { return label }
         return label + " · " + WidgetPresentation.resetCountdown(to: resetAt, now: entry.date)
     }

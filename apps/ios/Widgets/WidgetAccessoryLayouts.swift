@@ -151,7 +151,7 @@ struct WidgetAccessoryView: View {
                         now: entry.date, locale: entry.locale
                     )
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(LocalizedStringKey(window.label))
+                        Text(verbatim: window.label)
                         Spacer(minLength: 4)
                         Text(verbatim: column.shortValueText)
                     }

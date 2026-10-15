@@ -308,7 +308,7 @@ struct WidgetWindowColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(LocalizedStringKey(window.label))
+                Text(verbatim: window.label)
                     .foregroundStyle(ink.secondary)
                 Spacer(minLength: 4)
                 Text(verbatim: valueText)
