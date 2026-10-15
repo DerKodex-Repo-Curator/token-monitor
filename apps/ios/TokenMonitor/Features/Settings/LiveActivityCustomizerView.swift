@@ -83,6 +83,7 @@ struct LiveActivityCustomizerView: View {
                 stage
                 controls
                 gallery
+                dataControls
             }
             .padding(.horizontal, DesignTokens.screenPadding)
             .padding(.bottom, 32)
@@ -414,6 +415,30 @@ struct LiveActivityCustomizerView: View {
         .foregroundStyle(.secondary)
     }
 
+    /// The active surface's data controls stay in the page, beside its
+    /// appearance choices. Editing the miniature preview is optional.
+    private var dataControls: some View {
+        SurfaceCard {
+            VStack(alignment: .leading, spacing: 12) {
+                if surface == .compact {
+                    Picker("Side", selection: $slot) {
+                        Text("Left").tag(Slot.leading)
+                        Text("Right").tag(Slot.trailing)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Text(sourceTitle).font(.headline)
+                if sourceNeeds.any {
+                    sourceFields
+                        .pickerStyle(.menu)
+                } else {
+                    Text("This appearance has no data options.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     // MARK: - Gallery
 
     private var gallery: some View {
@@ -661,80 +686,89 @@ struct LiveActivityCustomizerView: View {
         )
     }
 
-    /// The desktop composer's choices as a native form sheet.
-    private var sourceSheet: some View {
+    /// Reused by the inline controls and the preview's Edit shortcut.
+    @ViewBuilder
+    private var sourceFields: some View {
         let needs = sourceNeeds
         let source = sourceBinding
-        return NavigationStack {
-            Form {
-                if needs.quota || needs.provider {
-                    Section {
-                        Picker("AI tool", selection: toolBinding(source)) {
-                            Label {
-                                Text("Automatic · lowest remaining")
-                            } icon: {
-                                Image(uiImage: ProviderMenuArtwork.symbol("arrow.down.circle", colorScheme: colorScheme))
-                            }
-                                .tag("auto:lowest")
-                            Label {
-                                Text("Automatic · most recently used")
-                            } icon: {
-                                Image(uiImage: ProviderMenuArtwork.symbol("clock.arrow.circlepath", colorScheme: colorScheme))
-                            }
-                                .tag("auto:recent")
-                            Divider()
-                            ForEach(quotaProviderIDs, id: \.self) { providerID in
-                                Label {
-                                    Text(verbatim: ProviderPresentation.displayName(for: providerID))
-                                } icon: {
-                                    Image(uiImage: ProviderMenuArtwork.image(for: providerID, colorScheme: colorScheme))
-                                }
-                                .tag("provider:\(providerID)")
-                            }
+        if needs.quota || needs.provider {
+            LabeledContent("AI tool") {
+                Picker("AI tool", selection: toolBinding(source)) {
+                    Text("Automatic · lowest remaining").tag("auto:lowest")
+                    Text("Automatic · most recently used").tag("auto:recent")
+                    Divider()
+                    ForEach(quotaProviderIDs, id: \.self) { providerID in
+                        Label {
+                            Text(verbatim: ProviderPresentation.displayName(for: providerID))
+                        } icon: {
+                            Image(uiImage: ProviderMenuArtwork.image(for: providerID, colorScheme: colorScheme))
                         }
-                        if needs.quota, let providerID = source.wrappedValue.providerID,
-                           accounts(for: providerID).count > 1 {
-                            Picker("Account", selection: source.accountKey) {
-                                Text("Lowest remaining").tag(String?.none)
-                                ForEach(accounts(for: providerID), id: \.id) { account in
-                                    Text(verbatim: account.title).tag(Optional(account.id))
-                                }
-                            }
-                        }
+                        .tag("provider:\(providerID)")
                     }
                 }
-                if needs.quota {
-                    Section {
-                        Picker("Quota window", selection: source.window) {
-                            ForEach(ActivitySource.Window.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }
-                        Picker("Display", selection: source.value) {
-                            ForEach(ActivitySource.Value.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                }
-                if needs.usage || needs.period {
-                    Section {
-                        if needs.usage {
-                            Picker("Tools", selection: source.scope) {
-                                ForEach(ActivitySource.Scope.allCases, id: \.self) { Text($0.title).tag($0) }
-                            }
-                        }
-                        Picker("Period", selection: source.period) {
-                            ForEach(ActivitySource.Period.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                }
+                .labelsHidden()
             }
-            .navigationTitle(sourceTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { editing = false }
+            .frame(minHeight: 44)
+            if needs.quota, let providerID = source.wrappedValue.providerID,
+               accounts(for: providerID).count > 1 {
+                LabeledContent("Account") {
+                    Picker("Account", selection: source.accountKey) {
+                        Text("Lowest remaining").tag(String?.none)
+                        ForEach(accounts(for: providerID), id: \.id) { account in
+                            Text(verbatim: account.title).tag(Optional(account.id))
+                        }
+                    }
+                    .labelsHidden()
                 }
+                .frame(minHeight: 44)
             }
+        }
+        if needs.quota {
+            LabeledContent("Quota window") {
+                Picker("Quota window", selection: source.window) {
+                    ForEach(ActivitySource.Window.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+            }
+            .frame(minHeight: 44)
+            LabeledContent("Display") {
+                Picker("Display", selection: source.value) {
+                    ForEach(ActivitySource.Value.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+            }
+            .frame(minHeight: 44)
+        }
+        if needs.usage {
+            LabeledContent("Tools") {
+                Picker("Tools", selection: source.scope) {
+                    ForEach(ActivitySource.Scope.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+            }
+            .frame(minHeight: 44)
+        }
+        if needs.period {
+            LabeledContent("Period") {
+                Picker("Period", selection: source.period) {
+                    ForEach(ActivitySource.Period.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+            }
+            .frame(minHeight: 44)
+        }
+    }
+
+    private var sourceSheet: some View {
+        NavigationStack {
+            Form { sourceFields }
+                .navigationTitle(sourceTitle)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { editing = false }
+                    }
+                }
         }
     }
 

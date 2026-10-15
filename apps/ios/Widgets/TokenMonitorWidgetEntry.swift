@@ -4,7 +4,7 @@ import Foundation
 
 /// Resolved ink choice — the widget intent's contrast option, decoupled from
 /// AppIntents so the app target can build previews.
-enum WidgetInk {
+enum WidgetInk: String {
     case recommended
     case light
     case dark

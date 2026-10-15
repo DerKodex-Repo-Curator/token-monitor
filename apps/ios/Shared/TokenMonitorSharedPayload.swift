@@ -108,6 +108,10 @@ nonisolated struct TokenMonitorSharedPayload: Codable, Equatable, Sendable {
         var widgetProviderID: String?
         var widgetShowsCost: Bool
         var widgetShowsUpdateTime: Bool
+        var widgetTextContrast: String
+        var widgetLimitLayout: String
+        var widgetShowsResetTime: Bool
+        var widgetActivityLayout: String
         var liveActivityEnabled: Bool
         var liveLayout: LiveActivityLayout
         var currencyCode: String?
@@ -121,6 +125,10 @@ nonisolated struct TokenMonitorSharedPayload: Codable, Equatable, Sendable {
             widgetProviderID: String? = nil,
             widgetShowsCost: Bool = true,
             widgetShowsUpdateTime: Bool = true,
+            widgetTextContrast: String = "recommended",
+            widgetLimitLayout: String = "columns",
+            widgetShowsResetTime: Bool = true,
+            widgetActivityLayout: String = "chart",
             liveActivityEnabled: Bool = false,
             liveLayout: LiveActivityLayout = LiveActivityLayout(),
             currencyCode: String? = "USD",
@@ -133,6 +141,10 @@ nonisolated struct TokenMonitorSharedPayload: Codable, Equatable, Sendable {
             self.widgetProviderID = widgetProviderID
             self.widgetShowsCost = widgetShowsCost
             self.widgetShowsUpdateTime = widgetShowsUpdateTime
+            self.widgetTextContrast = widgetTextContrast
+            self.widgetLimitLayout = widgetLimitLayout
+            self.widgetShowsResetTime = widgetShowsResetTime
+            self.widgetActivityLayout = widgetActivityLayout
             self.liveActivityEnabled = liveActivityEnabled
             self.liveLayout = liveLayout
             self.currencyCode = currencyCode
@@ -149,6 +161,10 @@ nonisolated struct TokenMonitorSharedPayload: Codable, Equatable, Sendable {
                 widgetProviderID: try container.decodeIfPresent(String.self, forKey: .widgetProviderID),
                 widgetShowsCost: try container.decodeIfPresent(Bool.self, forKey: .widgetShowsCost) ?? true,
                 widgetShowsUpdateTime: try container.decodeIfPresent(Bool.self, forKey: .widgetShowsUpdateTime) ?? true,
+                widgetTextContrast: try container.decodeIfPresent(String.self, forKey: .widgetTextContrast) ?? "recommended",
+                widgetLimitLayout: try container.decodeIfPresent(String.self, forKey: .widgetLimitLayout) ?? "columns",
+                widgetShowsResetTime: try container.decodeIfPresent(Bool.self, forKey: .widgetShowsResetTime) ?? true,
+                widgetActivityLayout: try container.decodeIfPresent(String.self, forKey: .widgetActivityLayout) ?? "chart",
                 liveActivityEnabled: try container.decodeIfPresent(Bool.self, forKey: .liveActivityEnabled) ?? false,
                 liveLayout: (try? container.decodeIfPresent(LiveActivityLayout.self, forKey: .liveLayout))
                     ?? LiveActivityLayout(),
@@ -166,6 +182,10 @@ nonisolated struct TokenMonitorSharedPayload: Codable, Equatable, Sendable {
             try container.encodeIfPresent(widgetProviderID, forKey: .widgetProviderID)
             try container.encode(widgetShowsCost, forKey: .widgetShowsCost)
             try container.encode(widgetShowsUpdateTime, forKey: .widgetShowsUpdateTime)
+            try container.encode(widgetTextContrast, forKey: .widgetTextContrast)
+            try container.encode(widgetLimitLayout, forKey: .widgetLimitLayout)
+            try container.encode(widgetShowsResetTime, forKey: .widgetShowsResetTime)
+            try container.encode(widgetActivityLayout, forKey: .widgetActivityLayout)
             try container.encode(liveActivityEnabled, forKey: .liveActivityEnabled)
             try container.encode(liveLayout, forKey: .liveLayout)
             try container.encodeIfPresent(currencyCode, forKey: .currencyCode)
@@ -180,6 +200,10 @@ nonisolated struct TokenMonitorSharedPayload: Codable, Equatable, Sendable {
             case widgetProviderID
             case widgetShowsCost
             case widgetShowsUpdateTime
+            case widgetTextContrast
+            case widgetLimitLayout
+            case widgetShowsResetTime
+            case widgetActivityLayout
             case liveActivityEnabled
             case liveLayout
             case currencyCode

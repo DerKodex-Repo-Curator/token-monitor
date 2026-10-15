@@ -27,16 +27,17 @@ struct WidgetLimitsView: View {
     // MARK: Small — one dominant reading, one compact second window
 
     private var small: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             WidgetHeader(entry: entry, isCompact: true)
             Spacer(minLength: 0)
             if let primary = windows.first {
                 let column = WidgetWindowColumn(
                     window: primary, providerID: providerID,
-                    now: entry.date, locale: entry.locale
+                    now: entry.date, locale: entry.locale,
+                    showsResetTime: entry.preferences.widgetShowsResetTime
                 )
                 VStack(alignment: .leading, spacing: 4) {
-                    valueRow(column, size: 34)
+                    valueRow(column, size: 30)
                     Text(verbatim: labelWithReset(primary))
                         .font(.caption)
                         .foregroundStyle(ink.secondary)
@@ -47,7 +48,8 @@ struct WidgetLimitsView: View {
             if !accessible, let secondary = windows.dropFirst().first {
                 let column = WidgetWindowColumn(
                     window: secondary, providerID: providerID,
-                    now: entry.date, locale: entry.locale
+                    now: entry.date, locale: entry.locale,
+                    showsResetTime: entry.preferences.widgetShowsResetTime
                 )
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -68,29 +70,39 @@ struct WidgetLimitsView: View {
     // MARK: Medium — up to two equal window columns
 
     private var medium: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let rows = entry.preferences.widgetLimitLayout == "rows"
+        return VStack(alignment: .leading, spacing: 12) {
             WidgetHeader(entry: entry, planLabel: entry.preferredLimit?.planLabel)
             Link(destination: Self.limitsURL) {
-                HStack(alignment: .top, spacing: 16) {
+                (rows
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+                    : AnyLayout(HStackLayout(alignment: .top, spacing: 16))) {
                     ForEach(windows.prefix(accessible ? 1 : 2)) { window in
                         let column = WidgetWindowColumn(
                             window: window, providerID: providerID,
-                            now: entry.date, locale: entry.locale
+                            now: entry.date, locale: entry.locale,
+                            showsResetTime: entry.preferences.widgetShowsResetTime
                         )
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(LocalizedStringKey(window.label))
-                                .font(.caption)
-                                .foregroundStyle(ink.secondary)
-                                .lineLimit(1)
-                            valueRow(column, size: 28)
-                            meter(for: column, height: 6)
-                            Text(verbatim: column.resetText ?? " ")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(ink.secondary)
-                                .lineLimit(1)
+                        if rows {
+                            column
+                        } else {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(LocalizedStringKey(window.label))
+                                    .font(.caption)
+                                    .foregroundStyle(ink.secondary)
+                                    .lineLimit(1)
+                                valueRow(column, size: 28)
+                                meter(for: column, height: 6)
+                                if entry.preferences.widgetShowsResetTime {
+                                    Text(verbatim: column.resetText ?? " ")
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(ink.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityElement(children: .combine)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -194,7 +206,8 @@ struct WidgetLimitsView: View {
                     window: windows[index],
                     providerID: providerID,
                     now: entry.date,
-                    locale: entry.locale
+                    locale: entry.locale,
+                    showsResetTime: entry.preferences.widgetShowsResetTime
                 )
             }
         }
@@ -205,19 +218,24 @@ struct WidgetLimitsView: View {
 
     /// `82%` with a baseline-aligned `left` — or the credits amount alone.
     private func valueRow(_ column: WidgetWindowColumn, size: CGFloat) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text(verbatim: column.shortValueText)
                 .font(.system(size: size, weight: .semibold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+                .padding(.trailing, 2)
                 .widgetAccentable()
             if column.isPercent {
                 Text(verbatim: "left")
                     .font(.caption)
                     .foregroundStyle(ink.secondary)
+                    .fixedSize()
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func meter(for column: WidgetWindowColumn, height: CGFloat) -> some View {
@@ -240,7 +258,7 @@ struct WidgetLimitsView: View {
     /// `Session · 1h 30m` — window label plus its reset countdown.
     private func labelWithReset(_ window: TokenMonitorSharedPayload.LimitWindow) -> String {
         let label = String(localized: String.LocalizationValue(window.label), locale: entry.locale)
-        guard let resetAt = window.resetAt else { return label }
+        guard entry.preferences.widgetShowsResetTime, let resetAt = window.resetAt else { return label }
         return label + " · " + WidgetPresentation.resetCountdown(to: resetAt, now: entry.date)
     }
 

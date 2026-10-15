@@ -22,15 +22,39 @@ struct TokenMonitorWidgetIntent: WidgetConfigurationIntent {
     @Parameter(title: "Update Time", default: .appDefault)
     var updateTimeVisibility: WidgetVisibilityOption
 
-    @Parameter(title: "Text Contrast", default: .recommended)
+    @Parameter(title: "Text Contrast", default: .appDefault)
     var textContrast: WidgetTextContrastOption
 
     static var parameterSummary: some ParameterSummary {
-        Summary("\(\.$content), \(\.$period)") {
-            \.$provider
-            \.$costVisibility
-            \.$updateTimeVisibility
-            \.$textContrast
+        Switch(\.$content) {
+            Case(.activity) {
+                Summary("\(\.$content)") {
+                    \.$updateTimeVisibility
+                    \.$textContrast
+                }
+            }
+            Case(.limits) {
+                Summary("\(\.$content)") {
+                    \.$provider
+                    \.$updateTimeVisibility
+                    \.$textContrast
+                }
+            }
+            Case(.overview) {
+                Summary("\(\.$content), \(\.$period)") {
+                    \.$costVisibility
+                    \.$updateTimeVisibility
+                    \.$textContrast
+                }
+            }
+            DefaultCase {
+                Summary("\(\.$content), \(\.$period)") {
+                    \.$provider
+                    \.$costVisibility
+                    \.$updateTimeVisibility
+                    \.$textContrast
+                }
+            }
         }
     }
 }

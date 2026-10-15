@@ -137,7 +137,7 @@ nonisolated enum WidgetActivityModel {
     // MARK: - Activity grid
 
     /// One grid cell. `tokens == nil` is an absent day, distinct from a
-    /// measured zero; `level` is the 1–4 quartile intensity for readings > 0.
+    /// measured zero; `level` is the Desktop 1–4 intensity for readings > 0.
     struct Cell: Equatable {
         let date: Date
         let tokens: Double?
@@ -173,7 +173,9 @@ nonisolated enum WidgetActivityModel {
         let firstStart = calendar.date(byAdding: .day, value: -7 * (count - 1), to: weekStart) ?? weekStart
         let values = daysByDate(days)
             .filter { $0.key >= firstStart && $0.key <= end }
-        let thresholds = quartiles(of: values.values.map(\.tokens).filter { $0 > 0 })
+        // Match Desktop's four bands against the full available history.
+        // Resizing the widget must not change the colour of the same day.
+        let peak = daysByDate(days).filter { $0.key <= end }.values.map(\.tokens).max() ?? 0
         let columns = (0..<count).map { week -> Column in
             Column(cells: (0..<7).map { weekday in
                 let date = calendar.date(byAdding: .day, value: week * 7 + weekday, to: firstStart) ?? firstStart
@@ -181,7 +183,7 @@ nonisolated enum WidgetActivityModel {
                 return Cell(
                     date: date,
                     tokens: tokens,
-                    level: intensity(for: tokens ?? 0, thresholds: thresholds),
+                    level: desktopIntensity(for: tokens ?? 0, peak: peak),
                     isFuture: date > end
                 )
             })
@@ -190,38 +192,26 @@ nonisolated enum WidgetActivityModel {
             columns: columns,
             activeDays: values.values.count { $0.tokens > 0 },
             visibleDays: columns.flatMap(\.cells).count { !$0.isFuture },
-            peak: thresholds == nil ? 0 : (values.values.map { $0.tokens }.max() ?? 0)
+            peak: values.values.map(\.tokens).max() ?? 0
         )
     }
 
-    /// Cell size and week count for the grid given its drawing rectangle:
-    /// `min((h − 6·gap)/7, cap)` tall, then as many weeks as the width fits.
-    static func gridGeometry(width: Double, height: Double, gap: Double = 3, cellCap: Double = 16)
+    /// Compact square cells, bounded by BOTH axes; no minimum height may
+    /// force a seven-row chart outside a small widget's proposed rectangle.
+    static func gridGeometry(width: Double, height: Double, gap: Double = 2, cellCap: Double = 10)
         -> (cell: Double, weeks: Int) {
-        let cell = max(4, min((height - 6 * gap) / 7, cellCap))
-        guard cell.isFinite, width.isFinite else { return (16, 1) }
-        let weeks = max(1, Int(floor((width + gap) / (cell + gap))))
+        guard width.isFinite, height.isFinite, width > 0, height > 6 * gap else {
+            return (0, 0)
+        }
+        let cell = max(0, min(width, (height - 6 * gap) / 7, cellCap))
+        let weeks = min(52, max(1, Int(floor((width + gap) / (cell + gap)))))
         return (cell, weeks)
     }
 
-    // MARK: - Intensity
-
-    /// First-quartile / median / third-quartile of sorted positive values —
-    /// the boundaries between the four heat levels, as in HeatmapModel.
-    static func quartiles(of values: [Double]) -> (Double, Double, Double)? {
-        guard !values.isEmpty else { return nil }
-        let sorted = values.sorted()
-        func quantile(_ p: Double) -> Double {
-            sorted[Int((Double(sorted.count - 1) * p).rounded())]
-        }
-        return (quantile(0.25), quantile(0.5), quantile(0.75))
+    static func desktopIntensity(for value: Double, peak: Double) -> Int {
+        guard value.isFinite, peak.isFinite, value > 0, peak > 0 else { return 0 }
+        let ratio = value / peak
+        return ratio >= 0.75 ? 4 : ratio >= 0.5 ? 3 : ratio >= 0.25 ? 2 : 1
     }
 
-    static func intensity(for value: Double, thresholds: (Double, Double, Double)?) -> Int {
-        guard let thresholds, value > 0, value.isFinite else { return 0 }
-        if value >= thresholds.2 { return 4 }
-        if value >= thresholds.1 { return 3 }
-        if value >= thresholds.0 { return 2 }
-        return 1
-    }
 }

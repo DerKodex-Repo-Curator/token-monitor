@@ -23,7 +23,9 @@ extension TokenMonitorWidgetEntry {
             providerID: selectedProvider.flatMap { $0.isEmpty ? nil : $0 },
             showsCost: configuration.costVisibility.resolve(preferences.widgetShowsCost),
             showsUpdateTime: configuration.updateTimeVisibility.resolve(preferences.widgetShowsUpdateTime),
-            ink: WidgetInk(configuration.textContrast)
+            ink: configuration.textContrast == .appDefault
+                ? (WidgetInk(rawValue: preferences.widgetTextContrast) ?? .recommended)
+                : WidgetInk(configuration.textContrast)
         )
     }
 }
@@ -41,7 +43,7 @@ private extension WidgetVisibilityOption {
 private extension WidgetInk {
     init(_ option: WidgetTextContrastOption) {
         switch option {
-        case .recommended: self = .recommended
+        case .appDefault, .recommended: self = .recommended
         case .light: self = .light
         case .dark: self = .dark
         }

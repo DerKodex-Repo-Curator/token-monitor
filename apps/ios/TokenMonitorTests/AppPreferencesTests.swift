@@ -74,6 +74,10 @@ struct AppPreferencesTests {
         preferences.widgetContent = .limits
         preferences.widgetPeriod = .month
         preferences.widgetProviderID = "claude"
+        preferences.widgetTextContrast = "light"
+        preferences.widgetLimitLayout = "rows"
+        preferences.widgetShowsResetTime = false
+        preferences.widgetActivityLayout = "summary"
         preferences.liveActivityEnabled = true
         var layout = LiveActivityLayout()
         layout.compactLeading = .init(style: .percentReset, source: .init(providerID: "codex", accountKey: "work", window: .weekly, value: .used))
@@ -90,6 +94,15 @@ struct AppPreferencesTests {
         #expect(persisted.widgetContent == "limits")
         #expect(persisted.widgetPeriod == "month")
         #expect(persisted.widgetProviderID == "claude")
+        #expect(persisted.widgetTextContrast == "light")
+        #expect(persisted.widgetLimitLayout == "rows")
+        #expect(!persisted.widgetShowsResetTime)
+        #expect(persisted.widgetActivityLayout == "summary")
+        let reloaded = AppPreferences(defaults: defaults, snapshotStore: snapshotStore)
+        #expect(reloaded.widgetTextContrast == "light")
+        #expect(reloaded.widgetLimitLayout == "rows")
+        #expect(!reloaded.widgetShowsResetTime)
+        #expect(reloaded.widgetActivityLayout == "summary")
         #expect(persisted.liveActivityEnabled)
         #expect(persisted.liveLayout.referencedProviderIDs == ["codex"])
         #expect(persisted.liveLayout.referencedAccountKeys == ["work"])
@@ -173,6 +186,10 @@ struct AppPreferencesTests {
         )
 
         #expect(preferences.liveLayout == LiveActivityLayout())
+        #expect(preferences.widgetTextContrast == "recommended")
+        #expect(preferences.widgetLimitLayout == "columns")
+        #expect(preferences.widgetShowsResetTime)
+        #expect(preferences.widgetActivityLayout == "chart")
     }
 
     @Test

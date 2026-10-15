@@ -14,12 +14,13 @@ struct WidgetLayoutRenderTests {
 
     private func entry(
         content: String = "overview",
-        snapshot: Snapshot? = TokenMonitorWidgetEntry.placeholderSnapshot
+        snapshot: Snapshot? = TokenMonitorWidgetEntry.placeholderSnapshot,
+        preferences: TokenMonitorSharedPayload.Preferences = .default
     ) -> TokenMonitorWidgetEntry {
         TokenMonitorWidgetEntry(
             date: .now,
             snapshot: snapshot,
-            preferences: .default,
+            preferences: preferences,
             content: content,
             period: "today",
             providerID: nil,
@@ -156,4 +157,33 @@ struct WidgetLayoutRenderTests {
             )
         }
     }
+    @Test func alternateLayoutsAndBoundaryQuotasRender() {
+        for layout in ["columns", "rows"] {
+            var preferences = TokenMonitorSharedPayload.Preferences.default
+            preferences.widgetLimitLayout = layout
+            preferences.languageCode = "zh-TW"
+            let base = TokenMonitorWidgetEntry.placeholderSnapshot
+            let limit = TokenMonitorSharedPayload.Limit(
+                id: "claude", providerID: "claude", planLabel: "Pro", status: "ok",
+                updatedAt: .now,
+                windows: [0.0, 100.0].enumerated().map { index, value in
+                    .init(id: "\(index)", label: index == 0 ? "Session" : "Weekly",
+                          remainingPercent: value, amount: nil, currency: nil,
+                          resetAt: Date.now.addingTimeInterval(7200))
+                }
+            )
+            let snapshot = Snapshot(updatedAt: .now, today: base.today, month: base.month,
+                                    allTime: base.allTime, limits: [limit], activity: base.activity)
+            for (name, family, size) in families.prefix(3) {
+                check(entry(content: "limits", snapshot: snapshot, preferences: preferences),
+                      content: "limits", name: name, family: family, size: size, state: "boundary-\(layout)")
+            }
+        }
+        var preferences = TokenMonitorSharedPayload.Preferences.default
+        preferences.widgetActivityLayout = "summary"
+        preferences.languageCode = "zh-TW"
+        check(entry(content: "activity", preferences: preferences), content: "activity",
+              name: "medium", family: .systemMedium, size: CGSize(width: 364, height: 170), state: "summary")
+    }
+
 }

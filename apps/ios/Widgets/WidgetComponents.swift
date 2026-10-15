@@ -303,6 +303,7 @@ struct WidgetWindowColumn: View {
     let providerID: String?
     let now: Date
     let locale: Locale
+    var showsResetTime = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -312,14 +313,19 @@ struct WidgetWindowColumn: View {
                 Spacer(minLength: 4)
                 Text(verbatim: valueText)
                     .fontWeight(.semibold)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    .minimumScaleFactor(0.8)
             }
             .font(.caption.monospacedDigit())
             .lineLimit(1)
             meter
-            Text(verbatim: resetText ?? " ")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(ink.secondary)
-                .lineLimit(1)
+            if showsResetTime {
+                Text(verbatim: resetText ?? " ")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(ink.secondary)
+                    .lineLimit(1)
+            }
         }
         .accessibilityElement(children: .combine)
     }
@@ -381,36 +387,35 @@ struct WidgetWindowColumn: View {
 // MARK: - Activity grid
 
 /// GitHub-style grid: week columns, Sunday-first rows, ending at the current
-/// week. Level 1–4 readings are accent 0.35/0.55/0.78/1.0, a measured zero is
+/// week. Desktop heat levels use accent 0.18/0.45/0.80/1.0; a measured zero is
 /// ink 0.10, absent 0.05, and future cells are not drawn.
 struct WidgetActivityGrid: View {
     @Environment(\.widgetInk) private var ink
     let grid: WidgetActivityModel.Grid
     let cell: CGFloat
-    var gap: CGFloat = 3
+    var gap: CGFloat = 2
     var monthLabels = false
     let locale: Locale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if monthLabels { monthRow }
             HStack(alignment: .top, spacing: gap) {
                 ForEach(Array(grid.columns.enumerated()), id: \.offset) { _, column in
                     VStack(spacing: gap) {
                         ForEach(Array(column.cells.enumerated()), id: \.offset) { _, cell in
-                            RoundedRectangle(cornerRadius: max(1, self.cell * 0.22), style: .continuous)
+                            RoundedRectangle(cornerRadius: min(2, self.cell * 0.2), style: .continuous)
                                 .fill(color(for: cell))
                                 .frame(width: self.cell, height: self.cell)
                         }
                     }
                 }
             }
-            // The grid ends at the current week — anchor it to the trailing
-            // edge so leftover space lands on the oldest weeks.
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            // Align the calendar and its month captions to the same edge.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .widgetAccentable()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(summary)
+            if monthLabels { monthRow }
         }
     }
 
@@ -418,15 +423,14 @@ struct WidgetActivityGrid: View {
         if cell.isFuture { return .clear }
         guard let tokens = cell.tokens else { return ink.primary.opacity(0.05) }
         guard tokens > 0 else { return ink.primary.opacity(0.10) }
-        let opacities = [0.0, 0.40, 0.55, 0.78, 1.0]
+        let opacities = [0.0, 0.18, 0.45, 0.80, 1.0]
         return ink.accent.opacity(opacities[min(4, max(1, cell.level))])
     }
 
-    /// A short month label over the first column of each month, trailing
-    /// aligned like the columns it labels.
+    /// Month labels below the grid, matching Desktop's calendar.
     private var monthRow: some View {
         HStack(alignment: .top, spacing: gap) {
-            ForEach(Array(grid.columns.enumerated()), id: \.offset) { index, column in
+            ForEach(Array(grid.columns.enumerated()), id: \.offset) { index, _ in
                 let label = monthLabel(at: index)
                 Text(verbatim: label)
                     .font(.caption2)
@@ -436,21 +440,25 @@ struct WidgetActivityGrid: View {
                     .frame(width: cell, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityHidden(true)
     }
 
     private func monthLabel(at index: Int) -> String {
         let columns = grid.columns
-        guard columns.indices.contains(index) else { return "" }
+        let labelColumns = max(3, Int(ceil(32 / (cell + gap))))
+        guard columns.indices.contains(index), index <= columns.count - labelColumns else { return "" }
         let calendar = WidgetActivityModel.calendar
-        let month = calendar.component(.month, from: columns[index].firstDate)
-        if index > 0,
-           calendar.component(.month, from: columns[index - 1].firstDate) == month {
-            return ""
+        var lastLabel = -labelColumns
+        for candidate in 0...index {
+            let month = calendar.component(.month, from: columns[candidate].firstDate)
+            let beginsMonth = candidate == 0
+                || calendar.component(.month, from: columns[candidate - 1].firstDate) != month
+            guard beginsMonth, candidate - lastLabel >= labelColumns else { continue }
+            lastLabel = candidate
         }
-        return columns[index].firstDate
-            .formatted(.dateTime.month(.abbreviated).locale(locale))
+        guard lastLabel == index else { return "" }
+        return columns[index].firstDate.formatted(.dateTime.month(.abbreviated).locale(locale))
     }
 
     private var summary: String {

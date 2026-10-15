@@ -126,6 +126,22 @@ final class AppPreferences {
         didSet { persistSharedPreferences() }
     }
 
+    var widgetTextContrast: String {
+        didSet { persistSharedPreferences() }
+    }
+
+    var widgetLimitLayout: String {
+        didSet { persistSharedPreferences() }
+    }
+
+    var widgetShowsResetTime: Bool {
+        didSet { persistSharedPreferences() }
+    }
+
+    var widgetActivityLayout: String {
+        didSet { persistSharedPreferences() }
+    }
+
     var liveActivityEnabled: Bool {
         didSet { persistSharedPreferences() }
     }
@@ -178,6 +194,10 @@ final class AppPreferences {
         widgetProviderID = shared.widgetProviderID ?? ""
         widgetShowsCost = shared.widgetShowsCost
         widgetShowsUpdateTime = shared.widgetShowsUpdateTime
+        widgetTextContrast = shared.widgetTextContrast
+        widgetLimitLayout = shared.widgetLimitLayout
+        widgetShowsResetTime = shared.widgetShowsResetTime
+        widgetActivityLayout = shared.widgetActivityLayout
         liveActivityEnabled = shared.liveActivityEnabled
         liveLayout = shared.liveLayout
     }
@@ -189,6 +209,10 @@ final class AppPreferences {
             widgetProviderID: widgetProviderID.nilIfEmpty,
             widgetShowsCost: widgetShowsCost,
             widgetShowsUpdateTime: widgetShowsUpdateTime,
+            widgetTextContrast: widgetTextContrast,
+            widgetLimitLayout: widgetLimitLayout,
+            widgetShowsResetTime: widgetShowsResetTime,
+            widgetActivityLayout: widgetActivityLayout,
             liveActivityEnabled: liveActivityEnabled,
             liveLayout: liveLayout,
             currencyCode: currency.rawValue,

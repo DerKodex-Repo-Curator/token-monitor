@@ -374,11 +374,11 @@ struct ActivityMeter: View {
         Capsule()
             .fill(tint.opacity(0.25))
             .overlay(alignment: .leading) {
-                if let fraction {
+                if let fraction, fraction.isFinite, fraction > 0 {
                     GeometryReader { proxy in
                         Capsule()
                             .fill(tint)
-                            .frame(width: max(height, fraction * proxy.size.width))
+                            .frame(width: min(1, fraction) * proxy.size.width)
                     }
                 }
             }

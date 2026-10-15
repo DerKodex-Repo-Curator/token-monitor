@@ -71,6 +71,7 @@ struct WidgetSettingsView: View {
         Form {
             previewSection
             contentSection(preferences: $preferences)
+            appearanceSection(preferences: $preferences)
             addSection
         }
         .formStyle(.grouped)
@@ -109,7 +110,7 @@ struct WidgetSettingsView: View {
             providerID: preferences.widgetProviderID,
             showsCost: preferences.widgetShowsCost,
             showsUpdateTime: preferences.widgetShowsUpdateTime,
-            ink: .recommended
+            ink: WidgetInk(rawValue: preferences.widgetTextContrast) ?? .recommended
         )
     }
 
@@ -155,7 +156,7 @@ struct WidgetSettingsView: View {
         )
         .padding(16) // the system's widget content margins
         .frame(width: size.width, height: size.height)
-        .background(.background, in: .rect(cornerRadius: 24, style: .continuous))
+        .background(previewBackground, in: .rect(cornerRadius: 24, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(DesignTokens.border(for: colorScheme), lineWidth: 1)
@@ -168,6 +169,14 @@ struct WidgetSettingsView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: scale)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Widget preview"))
+    }
+
+    private var previewBackground: Color {
+        switch preferences.widgetTextContrast {
+        case "light": Color(white: 0.12)
+        case "dark": Color(white: 0.95)
+        default: Color(uiColor: .systemBackground)
+        }
     }
 
     // MARK: - Content defaults
@@ -209,9 +218,39 @@ struct WidgetSettingsView: View {
             if preferences.wrappedValue.widgetContent == .overview {
                 Toggle("Show cost", isOn: preferences.widgetShowsCost)
             }
+            if preferences.wrappedValue.widgetContent == .limits {
+                Picker("Quota layout", selection: preferences.widgetLimitLayout) {
+                    Text("Side by side").tag("columns")
+                    Text("Rows").tag("rows")
+                }
+                Toggle("Show reset time", isOn: preferences.widgetShowsResetTime)
+            }
+            if preferences.wrappedValue.widgetContent == .activity {
+                Picker("Activity layout", selection: preferences.widgetActivityLayout) {
+                    Text("Chart first").tag("chart")
+                    Text("Stats and chart").tag("summary")
+                }
+            }
             Toggle("Show update time", isOn: preferences.widgetShowsUpdateTime)
+        } header: {
+            Text("Widget defaults")
         } footer: {
             Text("These are defaults. Touch and hold a widget and choose Edit Widget to change just that one.")
+        }
+    }
+
+    @ViewBuilder
+    private func appearanceSection(preferences: Bindable<AppPreferences>) -> some View {
+        Section {
+            Picker("Text Contrast", selection: preferences.widgetTextContrast) {
+                Text("Recommended").tag("recommended")
+                Text("Light Text").tag("light")
+                Text("Dark Text").tag("dark")
+            }
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("Widgets set to App Default follow these settings. Layout choices apply to medium widgets; small and large widgets adapt to their size. Choose the background and size on the Home Screen.")
         }
     }
 

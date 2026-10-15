@@ -62,7 +62,7 @@ struct WidgetActivityModelTests {
         #expect(absentCell?.tokens == nil)
     }
 
-    @Test func quartilesDriveLevels() throws {
+    @Test func desktopMaximumBandsDriveLevels() throws {
         let reference = try now("2026-07-31")
         let days = [
             day("2026-07-26", 100),
@@ -231,5 +231,27 @@ struct WidgetActivityModelTests {
         #expect(
             entry(liveTokens: 165_200_000, known: false, history: history).days == history
         )
+    }
+}
+
+
+extension WidgetActivityModelTests {
+    @Test func gridFitsSmallAndMediumCanvasWithoutOverflow() {
+        for size in [(138.0, 74.0), (332, 82), (226, 97), (120, 12)] {
+            let geometry = WidgetActivityModel.gridGeometry(width: size.0, height: size.1)
+            if geometry.weeks == 0 { continue }
+            #expect(geometry.cell * 7 + 12 <= size.1)
+            #expect(Double(geometry.weeks) * geometry.cell + Double(geometry.weeks - 1) * 2 <= size.0)
+            #expect(geometry.cell <= 10)
+        }
+    }
+
+    @Test func sameDayKeepsDesktopIntensityWhenWidgetResizes() throws {
+        let reference = try now("2026-07-31")
+        let days = [day("2026-07-01", 100), day("2026-07-31", 25)]
+        let small = WidgetActivityModel.grid(days, weekCount: 1, now: reference)
+        let large = WidgetActivityModel.grid(days, weekCount: 26, now: reference)
+        #expect(small.columns.last?.cells[5].level == 2)
+        #expect(large.columns.last?.cells[5].level == 2)
     }
 }
