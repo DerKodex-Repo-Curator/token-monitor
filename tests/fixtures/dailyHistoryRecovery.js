@@ -8,7 +8,7 @@ const vm = require('node:vm');
 // The same archive/SQLite inputs can be replayed against pinned repository trees.
 // No collector, scanner, provider, subprocess or user data is involved.
 function runRecoveryScenario(root, scenario) {
-  const { normalizePeriod } = require(path.join(root, 'src/shared/usage.js'));
+  const { normalizePeriod, extractUsageFromTokscale } = require(path.join(root, 'src/shared/usage.js'));
   const { captureDailyHistoryArchive, captureLiveDailyHistory } = require(path.join(root, 'src/shared/dailyHistoryArchive.js'));
   const { createUsageTransform } = require(path.join(root, 'src/shared/usage/usageTransform.js'));
   const { createSessionUsageArchiveStore, readSessionUsageArchiveSnapshot } = require(path.join(root, 'src/shared/usage/sessionUsageArchiveStore.js'));
@@ -80,6 +80,12 @@ function runRecoveryScenario(root, scenario) {
     today: period(rows), month: period(rows), allTime: period(rows), sessionUsageArchiveFullScan: true });
   const collect = (rows, options = {}) => {
     const input = record(rows);
+    if (options.scanned) {
+      const scanned = extractUsageFromTokscale({ entries: rows.map(r => ({
+        client: r.client, sessionId: r.id, model: r.model, input: r.tokens, output: 0, cost: r.cost
+      })) });
+      for (const name of ['today', 'month', 'allTime']) input[name] = structuredClone(scanned);
+    }
     if (options.captureDaily !== false) {
       daily = captureLiveDailyHistory(daily, input.today, { todayKey: day });
       writeDaily();
@@ -89,6 +95,14 @@ function runRecoveryScenario(root, scenario) {
   };
   const result = visible => ({ tokens: visible.allTime.totalTokens, cost: visible.allTime.costUsd,
     models: { ...visible.allTime.models }, clientModels: visible.allTime.clientModels });
+  const graphResult = () => {
+    const { parseGraphResult } = require(path.join(root, 'src/shared/history.js'));
+    const graph = parseGraphResult(historyApi.graphFromDailyHistoryArchive([], daily, { todayKey: day }));
+    return { tokens: graph.contributions.reduce((sum, r) => sum + r.tokens, 0),
+      cost: graph.contributions.reduce((sum, r) => sum + r.cost, 0),
+      models: Object.assign({}, ...graph.contributions.map(r => Object.fromEntries(
+        Object.entries(r.perModel).map(([model, value]) => [model, value.tokens])))) };
+  };
   const reopen = () => { if (transform.release) transform.release(); else store.close(); store = createSessionUsageArchiveStore(storeOptions); transform = makeTransform(); headless = undefined; };
   const seedLegacySessions = rows => {
     const sessions = {};
@@ -100,6 +114,20 @@ function runRecoveryScenario(root, scenario) {
   };
   try {
     switch (scenario) {
+      case 'graph-rename':
+      case 'headless-graph-rename':
+      case 'graph-daily-only':
+      case 'graph-full-rename': {
+        seed([row(100, 'old-model', 1, 'claude', 'one')].concat(scenario === 'graph-full-rename'
+          ? [row(120, 'new-model', 1.2, 'claude', 'one')] : []).map(r => ({ ...r, date: day })));
+        if (scenario !== 'graph-daily-only') collect([row(100, 'old-model')], { scanned: true });
+        const visible = result(collect([row(120, 'new-model')], { scanned: true }));
+        const graph = graphResult();
+        const observedModels = snapshot().sessions['claude:one'].observedModels;
+        reopen();
+        const absent = result(collect([], { captureDaily: false, scanned: true }));
+        return { visible, graph, absent, graphAfterReopen: graphResult(), observedModels };
+      }
       case 'legacy':
       case 'legacy-profile':
       case 'headless-legacy-profile':

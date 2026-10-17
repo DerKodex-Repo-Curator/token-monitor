@@ -1310,7 +1310,7 @@ for (const oldClient of ['pi', 'omp']) {
         assert.deepEqual(visible, graphFromDailyHistoryArchive([], selectedOnly, { todayKey: date }));
         assert.deepEqual(cumulative, allTimeCumulativeFromArchive(selectedOnly));
       } else {
-        assert.equal(visible.contributions[0].clients.length, 2);
+        assert.deepEqual(visible, graphFromDailyHistoryArchive([], selectedOnly, { todayKey: date }));
         assert.equal(cumulative[oldClient].models.casemodel, 100, 'independent post-split products still add');
         assert.equal(cumulative[oldClient].costUsd, 10);
       }
@@ -1328,7 +1328,7 @@ test('canonical overlap still carries archive-only observations for other client
   const native = extractUsageFromTokscale({ entries: [{ client: 'claude', model: 'CaseModel', input: 120, output: 0, cost: 1 }] });
   const archive = captureLiveDailyHistory(old, native, { todayKey: date });
   const visible = historyFrom(graphFromDailyHistoryArchive([], archive, { todayKey: date }), date);
-  assert.equal(visible.daily[0].tokens, 130);
+  assert.equal(visible.daily[0].tokens, 120, 'graph keeps the selected whole day; only recovery candidates carry archive-only rows');
   const cumulative = allTimeCumulativeFromArchive(archive);
   assert.equal(cumulative.claude.models.casemodel, 120);
   assert.equal(cumulative.claude.models['archive-only'], 3);

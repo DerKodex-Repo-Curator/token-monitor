@@ -685,7 +685,7 @@ function withArchiveOnlyObservations(day, previousDay) {
   return changed ? { ...day, observations, ...(summary ? { componentSummary: summary } : {}) } : day;
 }
 
-function reconciledArchiveDays(graphs, normalizedArchive, options = {}) {
+function reconciledArchiveDays(graphs, normalizedArchive, options = {}, includeArchiveOnly = false) {
   const currentDays = observationsFromGraphs(graphs, { archive: normalizedArchive });
   const todayKey = String(options.todayKey || '').slice(0, 10);
   const hasTodayKey = DAY_KEY_RE.test(todayKey);
@@ -701,8 +701,11 @@ function reconciledArchiveDays(graphs, normalizedArchive, options = {}) {
     if (!previous) {
       currentDays.set(date, live);
     } else {
-      const selected = liveDayIsGreater(live, previous)
-        ? withArchiveOnlyObservations(mergeLiveDayMetadata(live, previous), previous) : previous;
+      const useLive = liveDayIsGreater(live, previous);
+      let selected = useLive ? mergeLiveDayMetadata(live, previous) : previous;
+      // Graphs keep one whole-day observation. Only allTime recovery receives
+      // archive-only candidates, which still need session coverage filtering.
+      if (includeArchiveOnly && useLive) selected = withArchiveOnlyObservations(selected, previous);
       currentDays.set(date, withReconciledGraphCosts(selected, previous, live, options.reprice === true));
     }
   }
@@ -808,7 +811,7 @@ function emptyCumulativeUsage() {
 function allTimeCumulativeFromArchive(archive) {
   const normalized = normalizeDailyHistoryArchive(archive);
   const cumulative = Object.create(null);
-  for (const day of reconciledArchiveDays([], normalized).values()) {
+  for (const day of reconciledArchiveDays([], normalized, {}, true).values()) {
     for (const [observation, split] of selectedDayComponents(day)) {
       const mergedEra = isPreSplitEntry(observation.clientIdentityGeneration === undefined ? day : observation);
       let client = normalizeClientName(observation.client);

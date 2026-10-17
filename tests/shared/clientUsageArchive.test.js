@@ -1222,8 +1222,8 @@ test('larger live snapshots retain disjoint archive-only records without taking 
   assert.equal(restored.costUsd, 4);
   assert.equal(restored.cacheReadTokens, 60);
   const history = graphFromDailyHistoryArchive([], archive).contributions[0].clients;
-  assert.equal(history.reduce((sum, row) => sum + row.tokens.input + row.tokens.cacheRead, 0), 400);
-  assert.equal(history.reduce((sum, row) => sum + row.cost, 0), 4);
+  assert.equal(history.reduce((sum, row) => sum + row.tokens.input + row.tokens.cacheRead, 0), 300);
+  assert.equal(history.reduce((sum, row) => sum + row.cost, 0), 3);
 });
 
 for (const [archivedClient, archivedModel, liveClient, liveModel] of [
@@ -1261,8 +1261,8 @@ test('an unidentified model in a different client partition is still independent
   archive = captureLiveDailyHistory(archive, capturedPeriod([['claude', 'unknown', 120, 1.2]]), { todayKey: date });
   const [history] = parseGraphResult(graphFromDailyHistoryArchive([], archive)).contributions;
   const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(archive)).allTime;
-  assert.equal(history.tokens, 220);
-  assert.equal(history.cost, 2.2);
+  assert.equal(history.tokens, 120);
+  assert.equal(history.cost, 1.2);
   assert.equal(restored.totalTokens, 220);
   assert.equal(restored.clients.codex, 100);
   assert.equal(restored.clients.claude, 120);
@@ -1282,7 +1282,7 @@ test('preserving archive-only records updates selected native component summarie
   assert.equal(restored.cacheReadTokens, 140);
   assert.equal(restored.unclassifiedTokens, 0);
   const selected = graphFromDailyHistoryArchive([], archive).contributions[0];
-  assert.equal(selected.tokenComponentSummary.cacheReadTokens, 140);
+  assert.equal(selected.tokenComponentSummary.cacheReadTokens, 80);
   assert.equal(selected.tokenComponentSummary.tokenComponentsAvailable, true);
 });
 
@@ -1294,9 +1294,9 @@ test('summary overlay preserves exact zero-unclassified axes beside archive-only
   for (const value of [archive, normalizeDailyHistoryArchive(JSON.parse(JSON.stringify(archive)))]) {
     const graph = graphFromDailyHistoryArchive([], value);
     const [day] = parseGraphResult(graph).contributions;
-    assert.equal(day.unclassifiedTokens, 100);
+    assert.equal(day.unclassifiedTokens, 0);
     assert.equal(day.perClient.claude.unclassifiedTokens, 0);
-    assert.equal(day.perClient.pi.unclassifiedTokens, 100);
+    assert.equal(day.perClient.pi, undefined);
     assert.equal(day.perModel.opus.unclassifiedTokens, 0);
     const restored = applyDailyHistoryAllTimeFloor(allTimeOnly({}), allTimeCumulativeFromArchive(value)).allTime;
     assert.equal(restored.unclassifiedTokens, 100);
@@ -1338,7 +1338,7 @@ test('adding archive-only tuples preserves native component attribution measured
   assert.equal(restored.unclassifiedTokens, 0);
   assert.equal(restored.modelCacheReads.a, 110);
   assert.equal(restored.modelCacheReads.b, 60);
-  assert.equal(history.cacheReadTokens, 170);
+  assert.equal(history.cacheReadTokens, 110);
   assert.equal(history.unclassifiedTokens, 0);
 });
 
@@ -1354,10 +1354,10 @@ test('cost-only observations never inherit another row\'s native token component
   assert.equal(restored.totalTokens, 110);
   assert.equal(restored.cacheReadTokens, 65);
   assert.equal(restored.costUsd, 2.1);
-  assert.equal(history.tokens, 110);
-  assert.equal(history.cacheReadTokens, 65);
+  assert.equal(history.tokens, 100);
+  assert.equal(history.cacheReadTokens, 60);
   assert.equal(history.perModel.unknown.tokens, 0);
-  assert.equal(history.cost, 2.1);
+  assert.equal(history.cost, 2);
 });
 
 test('fractional legacy costs are idempotent without losing real tiny cost-only restores', () => {

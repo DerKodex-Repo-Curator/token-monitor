@@ -7,6 +7,38 @@ const { runRecoveryScenario } = require('../fixtures/dailyHistoryRecovery');
 const root = path.resolve(__dirname, '../..');
 const run = scenario => runRecoveryScenario(root, scenario);
 
+for (const scenario of ['graph-rename', 'headless-graph-rename']) {
+  test(`${scenario}: a captured 100 -> 120 model correction keeps graph and allTime at 120 after reopen`, () => {
+    const { visible, graph, absent, graphAfterReopen, observedModels } = run(scenario);
+    assert.equal(visible.tokens, 120);
+    assert.equal(visible.cost, 1.2);
+    assert.deepEqual(visible.models, { 'new-model': 120 });
+    assert.deepEqual(graph, { tokens: 120, cost: 1.2, models: { 'new-model': 120 } });
+    assert.deepEqual(absent, visible);
+    assert.deepEqual(graphAfterReopen, graph);
+    assert.deepEqual(observedModels, ['new-model', 'old-model']);
+  });
+}
+
+test('daily-only old 100 remains eligible for allTime recovery beside new 120 without changing the selected graph day', () => {
+  const { visible, graph, absent, graphAfterReopen, observedModels } = run('graph-daily-only');
+  assert.equal(visible.tokens, 220);
+  assert.equal(visible.cost, 2.2);
+  assert.deepEqual(visible.models, { 'new-model': 120, 'old-model': 100 });
+  assert.deepEqual(graph, { tokens: 120, cost: 1.2, models: { 'new-model': 120 } });
+  assert.deepEqual(absent, visible);
+  assert.deepEqual(graphAfterReopen, graph);
+  assert.deepEqual(observedModels, ['new-model']);
+});
+
+test('a full graph already containing old and new models retains its existing whole-day limitation', () => {
+  const { visible, graph, absent } = run('graph-full-rename');
+  assert.equal(visible.tokens, 120);
+  assert.equal(visible.cost, 1.2);
+  assert.deepEqual(graph, { tokens: 220, cost: 2.2, models: { 'old-model': 100, 'new-model': 120 } });
+  assert.deepEqual(absent, visible);
+});
+
 test('daily-only legacy history restores the 20-day #808 model gap once', () => {
   const { first, repeated, dailyDays } = run('legacy');
   assert.equal(dailyDays, 20);
