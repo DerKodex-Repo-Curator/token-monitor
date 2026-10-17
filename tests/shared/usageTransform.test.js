@@ -237,39 +237,38 @@ test('the transform reads no setting outside the ones a worker is handed', () =>
   );
 });
 
-test('project raises allTime to the daily-history floor for a rotated source (#808)', () => {
-  const period = (tokens) => normalizePeriod({ totalTokens: tokens, clients: { codex: tokens } });
-  // allTime's live 20 tokens sit on the same model the floor knows, so the floor
-  // tops that model up to 900 rather than adding a second, unattributed slice.
+test('project preserves an observed model instead of topping up an ambiguous partial gap', () => {
+  const period = (tokens) => normalizePeriod({ totalTokens: tokens, clients: { claude: tokens } });
+  // A lower reading for an already observed model may be a correction.
   const allTime = normalizePeriod({
     totalTokens: 20,
-    clients: { codex: 20 },
+    clients: { claude: 20 },
     models: { 'gpt-5.5': 20 },
-    clientModels: { codex: { 'gpt-5.5': 20 } }
+    clientModels: { claude: { 'gpt-5.5': 20 } }
   });
   const enabled = createUsageTransform({
     store: fakeStore(),
     getSettings: () => ({}),
-    loadDailyHistoryFloor: () => ({ codex: { totalTokens: 900, costUsd: 0, models: { 'gpt-5.5': 900 }, modelCosts: {} } })
+    loadDailyHistoryFloor: () => ({ claude: { totalTokens: 900, costUsd: 0, models: { 'gpt-5.5': 900 }, modelCosts: {} } })
   });
   const lifted = enabled.project(
     { deviceId: 'mac', updatedAt: AT, today: period(5), month: period(20), allTime },
     { version: 1, sessions: {} },
     new Date(AT)
   );
-  assert.equal(lifted.allTime.totalTokens, 900, 'allTime lifted to the archive cumulative');
+  assert.equal(lifted.allTime.totalTokens, 20, 'an observed model stays authoritative');
   assert.equal(lifted.today.totalTokens, 5, 'today untouched');
   assert.equal(lifted.month.totalTokens, 20, 'month untouched');
 });
 
 test('project does not consult the floor when the archive is disabled', () => {
-  const period = (tokens) => normalizePeriod({ totalTokens: tokens, clients: { codex: tokens } });
+  const period = (tokens) => normalizePeriod({ totalTokens: tokens, clients: { claude: tokens } });
   const rotated = { deviceId: 'mac', updatedAt: AT, today: period(5), month: period(20), allTime: period(20) };
   let loads = 0;
   const transform = createUsageTransform({
     store: fakeStore(),
     getSettings: () => ({ sessionUsageArchiveEnabled: false }),
-    loadDailyHistoryFloor: () => { loads += 1; return { codex: { totalTokens: 900, costUsd: 0, models: {}, modelCosts: {} } }; }
+    loadDailyHistoryFloor: () => { loads += 1; return { claude: { totalTokens: 900, costUsd: 0, models: {}, modelCosts: {} } }; }
   });
   const projected = transform.project(rotated, null, new Date(AT));
   assert.equal(loads, 0, 'the floor loader is never called on the disabled path');
@@ -277,7 +276,7 @@ test('project does not consult the floor when the archive is disabled', () => {
 });
 
 test('a transform built without dailyHistoryArchive never reads the floor from disk', () => {
-  const period = (tokens) => normalizePeriod({ totalTokens: tokens, clients: { codex: tokens } });
+  const period = (tokens) => normalizePeriod({ totalTokens: tokens, clients: { claude: tokens } });
   const summaryRecord = { deviceId: 'mac', updatedAt: AT, today: period(5), month: period(5), allTime: period(5) };
   const transform = createUsageTransform({ store: fakeStore() });
   const projected = transform.project(summaryRecord, { version: 1, sessions: {} }, new Date(AT));
@@ -291,9 +290,9 @@ test('a failed archive read is not cached, so the next tick retries at the same 
   try {
     const period = (tokens) => normalizePeriod({
       totalTokens: tokens,
-      clients: { codex: tokens },
+      clients: { claude: tokens },
       models: { 'gpt-5.5': tokens },
-      clientModels: { codex: { 'gpt-5.5': tokens } }
+      clientModels: { claude: { 'gpt-5.5': tokens } }
     });
     const record = () => ({ deviceId: 'mac', updatedAt: AT, today: period(5), month: period(5), allTime: period(5) });
     let calls = 0;
@@ -307,14 +306,14 @@ test('a failed archive read is not cached, so the next tick retries at the same 
         calls += 1;
         if (calls === 1) throw new Error('transient read failure');
         return { version: 1, days: { '2026-07-01': { date: '2026-07-01', observations: [
-          { client: 'codex', modelId: 'gpt-5.5', tokens: 900, cost: 0, messages: 1 }
+          { client: 'claude', modelId: 'retired-model', tokens: 900, cost: 0, messages: 1 }
         ] } } };
       }
     });
 
     assert.equal(transform.project(record(), { version: 1, sessions: {} }, new Date(AT)).allTime.totalTokens, 5,
       'read failure applies no floor this tick');
-    assert.equal(transform.project(record(), { version: 1, sessions: {} }, new Date(AT)).allTime.totalTokens, 900,
+    assert.equal(transform.project(record(), { version: 1, sessions: {} }, new Date(AT)).allTime.totalTokens, 905,
       'next tick retries and applies the floor');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -328,9 +327,9 @@ for (const cost of [1.2, 0]) {
     const date = '2026-07-09';
     const period = (tokens, amount) => normalizePeriod({
       totalTokens: tokens, costUsd: amount,
-      clients: { codex: tokens }, clientCosts: { codex: amount },
+      clients: { claude: tokens }, clientCosts: { claude: amount },
       models: { gpt: tokens }, modelCosts: { gpt: amount },
-      clientModels: { codex: { gpt: tokens } }, clientModelCosts: { codex: { gpt: amount } }
+      clientModels: { claude: { gpt: tokens } }, clientModelCosts: { claude: { gpt: amount } }
     });
     const record = (allTime) => ({ updatedAt: AT, today: period(0, 0), month: period(0, 0), allTime });
     try {
@@ -342,16 +341,16 @@ for (const cost of [1.2, 0]) {
         dailyHistoryArchive: { path: archivePath }
       });
       const emptySessions = { version: 1, sessions: {} };
-      assert.equal(transform.project(record(period(0, 0)), emptySessions, new Date(AT)).allTime.costUsd, 10);
+      assert.equal(transform.project(record(normalizePeriod({})), emptySessions, new Date(AT)).allTime.costUsd, 10);
       archive = captureDailyHistoryArchive(archive, { contributions: [{ date, clients: [{
-        client: 'codex', modelId: 'gpt', tokens: { input: 120, output: 0, cacheRead: 0, cacheWrite: 0 }, cost
+        client: 'claude', modelId: 'gpt', tokens: { input: 120, output: 0, cacheRead: 0, cacheWrite: 0 }, cost
       }] }] }, { todayKey: date, pricingRevision: 'new', reprice: true });
       fs.writeFileSync(archivePath, JSON.stringify(archive));
       fs.utimesSync(archivePath, 2000, 2000);
       const present = transform.project(record(period(120, cost)), emptySessions, new Date(AT));
       assert.equal(present.allTime.totalTokens, 120);
       assert.equal(present.allTime.costUsd, cost);
-      const removed = transform.project(record(period(0, 0)), emptySessions, new Date(AT));
+      const removed = transform.project(record(normalizePeriod({})), emptySessions, new Date(AT));
       assert.equal(removed.allTime.totalTokens, 120);
       assert.equal(removed.allTime.costUsd, cost);
       assert.equal(removed.today.totalTokens, 0);

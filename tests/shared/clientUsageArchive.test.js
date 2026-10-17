@@ -689,7 +689,7 @@ function allTimeOnly(fields) {
   return { allTime: { totalTokens: 0, costUsd: 0, clients: {}, clientCosts: {}, models: {}, clientModels: {}, ...fields } };
 }
 
-test('the floor lifts allTime back to the archive cumulative when a source rotated away', () => {
+test('a partial same-model gap is not treated as proof of rotated history', () => {
   const cumulative = {
     claude: {
       totalTokens: 234000000,
@@ -710,11 +710,11 @@ test('the floor lifts allTime back to the archive cumulative when a source rotat
 
   const floored = applyDailyHistoryAllTimeFloor(summary, cumulative);
 
-  assert.equal(floored.allTime.totalTokens, 234000000);
-  assert.equal(floored.allTime.clients.claude, 234000000);
-  assert.equal(floored.allTime.models['claude-opus-4-8'], 234000000);
-  assert.equal(Math.round(floored.allTime.costUsd * 100) / 100, 32.5);
-  assert.equal(floored.allTime.capabilities.tokenComponents, false);
+  assert.equal(floored.allTime.totalTokens, 10000000);
+  assert.equal(floored.allTime.clients.claude, 10000000);
+  assert.equal(floored.allTime.models['claude-opus-4-8'], 10000000);
+  assert.equal(Math.round(floored.allTime.costUsd * 100) / 100, 1);
+  assert.strictEqual(floored, summary);
 });
 
 test('the floor never lowers or double counts a source still fully present', () => {
@@ -736,11 +736,11 @@ test('the floor never lowers or double counts a source still fully present', () 
 
 test('the floor is idempotent: applying to its own output adds nothing more', () => {
   const cumulative = { claude: { totalTokens: 500, costUsd: 4, models: { m: 500 }, modelCosts: { m: 4 } } };
-  const summary = allTimeOnly({ totalTokens: 100, clients: { claude: 100 }, models: { m: 100 }, clientModels: { claude: { m: 100 } } });
+  const summary = allTimeOnly({ totalTokens: 100, clients: { claude: 100 }, models: { current: 100 }, clientModels: { claude: { current: 100 } } });
   const first = applyDailyHistoryAllTimeFloor(summary, cumulative);
   const second = applyDailyHistoryAllTimeFloor(first, cumulative);
-  assert.equal(first.allTime.totalTokens, 500);
-  assert.equal(second.allTime.totalTokens, 500);
+  assert.equal(first.allTime.totalTokens, 600);
+  assert.equal(second.allTime.totalTokens, 600);
 });
 
 test('the floor only touches allTime, leaving today and month alone', () => {
@@ -748,12 +748,12 @@ test('the floor only touches allTime, leaving today and month alone', () => {
   const summary = {
     today: { totalTokens: 5, clients: { claude: 5 } },
     month: { totalTokens: 20, clients: { claude: 20 } },
-    allTime: { totalTokens: 100, costUsd: 0, clients: { claude: 100 }, clientCosts: {}, models: { m: 100 }, clientModels: { claude: { m: 100 } } }
+    allTime: { totalTokens: 100, costUsd: 0, clients: { claude: 100 }, clientCosts: {}, models: { current: 100 }, clientModels: { claude: { current: 100 } } }
   };
   const floored = applyDailyHistoryAllTimeFloor(summary, cumulative);
   assert.equal(floored.today.totalTokens, 5);
   assert.equal(floored.month.totalTokens, 20);
-  assert.equal(floored.allTime.totalTokens, 500);
+  assert.equal(floored.allTime.totalTokens, 600);
 });
 
 test('the floor is a no-op without an allTime period or without archive data', () => {
@@ -804,8 +804,8 @@ test('the floor restores a model that carried cost but no tokens', () => {
     costUsd: 0,
     clients: { claude: 100 },
     clientCosts: {},
-    models: {},
-    clientModels: { claude: {} },
+    models: { surviving: 100 },
+    clientModels: { claude: { surviving: 100 } },
     clientModelCosts: { claude: {} }
   });
 
@@ -857,15 +857,14 @@ test('the floor does not recount a merged-era Pi row against split live usage', 
   assert.equal(floored.allTime.clients.omp, 40);
 });
 
-test('a merged-era entry still restores history the whole family lost', () => {
+test('a partial legacy-family gap does not override current observations', () => {
   const archive = { version: 1, days: {
     '2026-08-01': { date: '2026-08-01', activeTimeMs: 0,
       observations: [{ client: 'pi', modelId: 'gpt', tokens: 100, cost: 6, messages: 2 }] }
   } };
   const cumulative = allTimeCumulativeFromArchive(archive);
 
-  // Only 15 of the family's 100 survives live, so the missing 85 comes back
-  // under the merged id the day was actually recorded as.
+  // The same aggregate could also mean an accepted lower correction.
   const summary = allTimeOnly({
     totalTokens: 15, costUsd: 1,
     clients: { pi: 10, omp: 5 },
@@ -877,8 +876,8 @@ test('a merged-era entry still restores history the whole family lost', () => {
 
   const floored = applyDailyHistoryAllTimeFloor(summary, cumulative);
 
-  assert.equal(floored.allTime.totalTokens, 100, 'the family total is restored to the archive');
-  assert.equal(floored.allTime.clients.pi, 95, '10 live pi + 85 restored');
+  assert.equal(floored.allTime.totalTokens, 15, 'a partial family gap stays unresolved');
+  assert.equal(floored.allTime.clients.pi, 10, 'live pi stays authoritative');
   assert.equal(floored.allTime.clients.omp, 5, 'live omp untouched');
 });
 
@@ -1063,13 +1062,13 @@ test('legacy and post-split floors do not consume the same live usage twice', ()
   ]]) {
     const summary = { allTime: capturedPeriod(rows) };
     const restored = applyDailyHistoryAllTimeFloor(summary, cumulative);
-    assert.equal(restored.allTime.totalTokens, 180);
-    assert.ok(Math.abs(restored.allTime.costUsd - 1.8) < 1e-12);
+    assert.equal(restored.allTime.totalTokens, rows.length ? summary.allTime.totalTokens : 180);
+    assert.ok(Math.abs(restored.allTime.costUsd - (rows.length ? summary.allTime.costUsd : 1.8)) < 1e-12);
     assert.strictEqual(applyDailyHistoryAllTimeFloor(restored, cumulative), restored);
   }
 });
 
-test('a partial restore leaves unidentified components unclassified instead of scaling the archived split', () => {
+test('an ambiguous partial restore leaves the current tokens and measured components unchanged', () => {
   const archive = captureDailyHistoryArchive({}, capturedGraph('2026-09-01', [['claude', 'opus', 1000, 5, 600]]));
   const surviving = capturedPeriod([['claude', 'opus', 400, 2]]);
   Object.assign(surviving, {
@@ -1077,13 +1076,13 @@ test('a partial restore leaves unidentified components unclassified instead of s
     capabilities: { tokenComponents: true }
   });
   const restored = applyDailyHistoryAllTimeFloor({ allTime: surviving }, allTimeCumulativeFromArchive(archive)).allTime;
-  assert.equal(restored.totalTokens, 1000);
+  assert.equal(restored.totalTokens, 400);
   assert.equal(restored.cacheReadTokens, 400);
   assert.equal(restored.clientCacheReads.claude, 400);
   assert.equal(restored.modelCacheReads.opus, 400);
-  assert.equal(restored.unclassifiedTokens, 600);
-  assert.equal(restored.modelUnclassifiedTokens.opus, 600);
-  assert.equal(restored.capabilities.tokenComponents, false);
+  assert.equal(restored.unclassifiedTokens || 0, 0);
+  assert.equal(restored.modelUnclassifiedTokens?.opus || 0, 0);
+  assert.equal(restored.capabilities.tokenComponents, true);
 });
 
 test('a larger component-less live reading retains measured counts without scaling them up', () => {

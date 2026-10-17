@@ -158,7 +158,7 @@ function createUsageTransform(options = {}) {
         canonicalSummary: true,
         mutate: true
       });
-      visibleSummary = applyDailyHistoryAllTimeFloor(withSessions, loadDailyHistoryFloor());
+      visibleSummary = applyDailyHistoryAllTimeFloor(withSessions, loadDailyHistoryFloor(), { sessionArchive: archive });
     }
     delete visibleSummary.sessionUsageArchiveFullScan;
     return settings.projectsEnabled === false ? visibleSummary : applyProjectRollups(visibleSummary);

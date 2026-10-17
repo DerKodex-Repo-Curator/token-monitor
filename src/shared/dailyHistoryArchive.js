@@ -640,9 +640,14 @@ function withArchiveOnlyObservations(day, previousDay) {
     }
   }
   const currentObservations = Object.values(day.observations);
+  const canonicalModel = observation => periodModelKeyFor(normalizeClientName(observation.client), observation.modelId);
+  const canonicalKey = observation => JSON.stringify([normalizeClientName(observation.client), canonicalModel(observation)]);
+  // Compare snapshot coverage using period identities without rewriting stored
+  // observation keys or combining the selected and previous records.
+  const currentKeys = new Set(currentObservations.map(canonicalKey));
   for (const [observation, components] of selectedDayComponents(previousDay)) {
     const key = observationKey(observation);
-    if (observations[key]) continue;
+    if (observations[key] || currentKeys.has(canonicalKey(observation))) continue;
     const legacy = isPreSplitEntry(previousDay);
     const family = CLIENT_IDENTITY_SPLITS.find(({ merged, split }) => (
       legacy && (observation.client === merged || observation.client === split)
@@ -656,7 +661,7 @@ function withArchiveOnlyObservations(day, previousDay) {
       return sameClient && (current.modelId === 'unknown' || observation.modelId === 'unknown');
     })) continue;
     if (family && currentObservations.some((current) => (
-      (current.client === family.merged || current.client === family.split) && current.modelId === observation.modelId
+      (current.client === family.merged || current.client === family.split) && canonicalModel(current) === canonicalModel(observation)
     ))) continue;
     changed = true;
     observations[key] = {

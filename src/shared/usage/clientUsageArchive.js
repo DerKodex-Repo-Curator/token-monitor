@@ -1,6 +1,6 @@
 'use strict';
 
-const { PERIODS, normalizeClientName, normalizePeriod } = require('../usage');
+const { PERIODS, normalizeClientName, normalizeModelNameForClient, normalizePeriod } = require('../usage');
 const { normalizeTokscaleModelNameForClient } = require('../history');
 const {
   CLIENT_IDENTITY_GENERATION, CLIENT_IDENTITY_SPLITS, isPreSplitEntry
@@ -563,53 +563,92 @@ function pruneArchivedClientUsage(archive, activeClients) {
   return normalizedArchive;
 }
 
-function liveModelMapsFor(family, live, reserved = null) {
-  const tokens = {};
-  const costs = {};
-  const originalTokens = reserved ? {} : tokens;
-  const costScales = reserved ? {} : costs;
-  for (const member of family) {
-    for (const [model, value] of Object.entries(live.clientModels?.[member] || {})) {
-      if (reserved) originalTokens[model] = numberValue(originalTokens[model]) + numberValue(value);
-      tokens[model] = numberValue(tokens[model]) + Math.max(0,
-        numberValue(value) - numberValue(reserved?.[member]?.models?.[model]));
+// Session identity owns corrections; daily aggregates cannot tell a partial
+// source loss from a lower reading. Recover only whole unrepresented models.
+function dailyHistoryCoverage(live, archive, ledgerKeys) {
+  const models = new Map();
+  const unknown = new Set();
+  // Generic daily history is captured before Dots is merged. Its independently
+  // retained rows, including unknown models, do not overlap native recovery.
+  const hasDots = Object.entries(live.sessions || {}).some(([key, session]) =>
+    session.client === 'codex' && (session.usageSource === 'codex-dots-local' || ledgerKeys.has(key)));
+  const nativeCodex = hasDots ? clientUsageFromPeriod(live, 'codex', ledgerKeys) : null;
+  const add = (rawClient, rawModel) => {
+    const client = normalizeClientName(rawClient);
+    const model = normalizeModelNameForClient(rawModel, client);
+    if (!client) return;
+    if (!model || model === 'unknown') { unknown.add(client); return; }
+    if (!models.has(client)) models.set(client, new Set());
+    models.get(client).add(model);
+  };
+  const clients = new Set([...Object.keys(live.clients || {}), ...Object.keys(live.clientCosts || {}),
+    ...Object.keys(live.clientModels || {}), ...Object.keys(live.clientModelCosts || {})]);
+  for (const client of clients) {
+    const native = client === 'codex' ? nativeCodex : null;
+    const tokenModels = native ? native.models : live.clientModels?.[client] || {};
+    const costModels = native ? native.modelCosts : live.clientModelCosts?.[client] || {};
+    for (const model of new Set([...Object.keys(tokenModels), ...Object.keys(costModels)])) add(client, model);
+    // archivedPeriod drops aggregate zero keys. Explicit native zero sessions
+    // still own that model and must exclude a historical maximum.
+    if (native) for (const session of Object.values(native.sessions)) {
+      for (const model of new Set([...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})])) add(client, model);
     }
-    for (const [model, value] of Object.entries(live.clientModelCosts?.[member] || {})) {
-      const reservedCost = numberValue(reserved?.[member]?.modelCosts?.[model]);
-      if (reserved) costScales[model] = Math.max(numberValue(costScales[model]), numberValue(value), reservedCost);
-      costs[model] = numberValue(costs[model]) + Math.max(0, numberValue(value) - reservedCost);
+    const tokens = Object.values(tokenModels).reduce((sum, n) => sum + numberValue(n), 0);
+    const cost = Object.values(costModels).reduce((sum, n) => sum + numberValue(n), 0);
+    const clientTokens = native ? native.totalTokens : numberValue(live.clients?.[client]);
+    const clientCost = native ? native.costUsd : numberValue(live.clientCosts?.[client]);
+    if (clientTokens > tokens
+      || clientCost - cost > 4 * Number.EPSILON * Math.max(cost, clientCost)) {
+      unknown.add(normalizeClientName(client));
     }
   }
-  return { tokens, costs, originalTokens, costScales };
+  // Unattributed aggregate usage may overlap any named historical partition.
+  const attributed = [...clients].reduce((sum, client) => sum + numberValue(live.clients?.[client]), 0);
+  const attributedCost = [...clients].reduce((sum, client) => sum + numberValue(live.clientCosts?.[client]), 0);
+  const globalUnknown = numberValue(live.clients?.unknown) > 0 || numberValue(live.clientCosts?.unknown) > 0
+    || numberValue(live.totalTokens) > attributed
+    || numberValue(live.costUsd) - attributedCost > 4 * Number.EPSILON * Math.max(attributedCost, numberValue(live.costUsd));
+  for (const entry of Object.values(archive?.sessions || {})) {
+    const client = normalizeClientName(entry.client);
+    if (!client) continue;
+    const names = new Set(entry.observedModels || []);
+    let hasAttribution = names.size > 0;
+    for (const session of Object.values(entry.periods || {})) {
+      const keys = new Set([...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})]);
+      for (const model of keys) names.add(model);
+      hasAttribution ||= keys.size > 0;
+      const tokens = Object.values(session.models || {}).reduce((sum, n) => sum + numberValue(n), 0);
+      if (numberValue(session.totalTokens) > tokens) unknown.add(client);
+    }
+    for (const model of names) add(client, model);
+    if (!hasAttribution || entry.modelHistoryUnknown === true) unknown.add(client);
+  }
+  return {
+    blocks(family, model) {
+      return globalUnknown || models.has('unknown') || unknown.has('unknown')
+        || (family.includes('unknown') && (models.size > 0 || unknown.size > 0))
+        || family.some(client => unknown.has(client)
+        || (model === 'unknown' ? models.get(client)?.size > 0 : models.get(client)?.has(model)));
+    }
+  };
 }
 
-function dailyHistoryShortfall(floor, { tokens: liveModels, costs: liveModelCosts, originalTokens: componentLiveModels, costScales }) {
-  const modelKeys = new Set([
-    ...Object.keys(floor.models || {}), ...Object.keys(floor.modelCosts || {})
-  ]);
+function missingDailyHistoryUsage(floor, family, coverage) {
   const models = {};
   const modelCosts = {};
   const perModelComponents = {};
   let totalTokens = 0;
   let costUsd = 0;
-  for (const model of modelKeys) {
-    const floorTokens = Math.max(0, Math.round(numberValue(floor.models?.[model])));
-    const gapTokens = floorTokens - Math.max(0, Math.round(numberValue(liveModels[model])));
-    if (gapTokens > 0) {
-      models[model] = gapTokens;
-      totalTokens += gapTokens;
-      // Partial restores cannot identify which components rotated away.
-      const split = floor.modelComponents?.[model];
-      perModelComponents[model] = split && !numberValue(componentLiveModels[model]) && gapTokens === floorTokens
-        ? split : { unclassifiedTokens: gapTokens };
+  for (const model of new Set([...Object.keys(floor.models || {}), ...Object.keys(floor.modelCosts || {})])) {
+    if (coverage.blocks(family, model)) continue;
+    const tokens = Math.max(0, Math.round(numberValue(floor.models?.[model])));
+    const cost = Math.max(0, numberValue(floor.modelCosts?.[model]));
+    if (tokens > 0) {
+      models[model] = tokens;
+      totalTokens += tokens;
+      perModelComponents[model] = floor.modelComponents?.[model] || { unclassifiedTokens: tokens };
     }
-    const floorCost = Math.max(0, numberValue(floor.modelCosts?.[model]));
-    const gapCost = floorCost - Math.max(0, numberValue(liveModelCosts[model]));
-    // Reservation subtraction must not create an unrepresentable cost-only addition.
-    if (gapCost > 4 * Number.EPSILON * Math.max(floorCost, numberValue(costScales[model]))) {
-      modelCosts[model] = gapCost;
-      costUsd += gapCost;
-    }
+    if (cost > 0) { modelCosts[model] = cost; costUsd += cost; }
   }
   if (totalTokens === 0 && costUsd === 0) return null;
   return {
@@ -618,32 +657,24 @@ function dailyHistoryShortfall(floor, { tokens: liveModels, costs: liveModelCost
   };
 }
 
-function applyDailyHistoryAllTimeFloor(summary, cumulative) {
-  if (!cumulative || typeof cumulative !== 'object') return summary;
-  const clients = Object.keys(cumulative);
-  if (clients.length === 0 || !hasSummaryPeriod(summary, 'allTime')) return summary;
+function applyDailyHistoryAllTimeFloor(summary, cumulative, options = {}) {
+  if (!cumulative || typeof cumulative !== 'object' || !hasSummaryPeriod(summary, 'allTime')) return summary;
   const live = periodFor(summary, 'allTime');
-  const shortfalls = [];
-  for (const client of clients) {
-    const shortfall = dailyHistoryShortfall(cumulative[client], liveModelMapsFor([client], live));
-    if (shortfall) shortfalls.push({ client, ...shortfall });
+  const coverage = dailyHistoryCoverage(live, options.sessionArchive, new Set(summary.codexLocalSessionKeys || []));
+  const recovered = [];
+  for (const [client, floor] of Object.entries(cumulative)) {
+    const whole = missingDailyHistoryUsage(floor, [client], coverage);
+    if (whole) recovered.push({ client, ...whole });
+    if (floor.legacy) {
+      const family = [client, ...CLIENT_IDENTITY_SPLITS.filter(({ merged }) => merged === client).map(({ split }) => split)];
+      const legacy = missingDailyHistoryUsage(floor.legacy, family, coverage);
+      if (legacy) recovered.push({ client, ...legacy });
+    }
   }
-
-  for (const client of clients) {
-    const legacy = cumulative[client].legacy;
-    if (!legacy) continue;
-    const family = [client, ...CLIENT_IDENTITY_SPLITS.filter(({ merged }) => merged === client).map(({ split }) => split)];
-    // Only usage above each member's post-split floor can cover the legacy family.
-    const shortfall = dailyHistoryShortfall(legacy, liveModelMapsFor(family, live, cumulative));
-    if (shortfall) shortfalls.push({ client, ...shortfall });
-  }
-  if (shortfalls.length === 0) return summary;
-
+  if (recovered.length === 0) return summary;
   const next = cloneJson(summary);
   const period = targetPeriod(next, 'allTime');
-  for (const { client, usage, components } of shortfalls) {
-    addClientUsage(period, client, usage, components);
-  }
+  for (const { client, usage, components } of recovered) addClientUsage(period, client, usage, components);
   return next;
 }
 

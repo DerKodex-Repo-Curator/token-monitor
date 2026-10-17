@@ -120,8 +120,7 @@ const cursorUsageEvents = createCursorUsageEventIndex();
 const sessionUsageArchiveStore = dryRun ? null : createSessionUsageArchiveStore({ cursorUsageEvents });
 // The headless agent projects the same archives the widget does, so a rotated
 // source's history must not drop out of its allTime either. The daily history
-// archive is written here regardless of dry-run (see dailyHistoryArchiveEnabled
-// below), so the floor reads it the same way in both modes.
+// archive is read in both modes; dry-run never writes it.
 const loadDailyHistoryFloor = createDailyHistoryFloorReader({
   dailyHistoryArchive: sessionUsageArchiveEnabled
 });
@@ -151,7 +150,7 @@ function summaryWithSessionUsageArchive(summary, now = new Date()) {
     });
     // After the session archive, and gated by the same switch: with the daily
     // archive off there is nothing on disk to raise allTime to.
-    visibleSummary = applyDailyHistoryAllTimeFloor(visibleSummary, loadDailyHistoryFloor());
+    visibleSummary = applyDailyHistoryAllTimeFloor(visibleSummary, loadDailyHistoryFloor(), { sessionArchive: sessionUsageArchive });
   }
   delete visibleSummary.sessionUsageArchiveFullScan;
   return projectsEnabled ? applyProjectRollups(visibleSummary) : visibleSummary;

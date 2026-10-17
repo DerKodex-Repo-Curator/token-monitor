@@ -17,6 +17,7 @@ const {
   retainLiveDailyHistory
 } = require('../../src/shared/dailyHistoryArchive');
 const { normalizeHistory, parseGraphResult } = require('../../src/shared/history');
+const { extractUsageFromTokscale } = require('../../src/shared/usage');
 
 function graph(date, clients, extra = {}) {
   return {
@@ -1252,4 +1253,84 @@ test('allTimeCumulativeFromArchive includes live-only days and selects the large
   assert.equal(cumulative.codex.totalTokens, 170, '120 (max on 07-01) + 50 (07-02)');
   assert.equal(cumulative.codex.models.gpt, 170);
   assert.equal(cumulative.codex.costUsd, 4);
+});
+
+for (const [rawClient, rawModel, canonicalClient, canonicalModel] of [
+  ['claude', 'CaseModel', 'claude', 'casemodel'],
+  ['reasonix', 'deepseek/deepseek-chat', 'reasonix', 'deepseek-chat'],
+  ['Claude Code', 'CaseModel', 'claude', 'casemodel']
+]) {
+  for (const cost of [0, 1]) {
+    test(`canonical overlap keeps the whole selected ${rawClient}/${rawModel} observation at cost ${cost}`, () => {
+      const date = '2026-07-09';
+      const native = extractUsageFromTokscale({ entries: [{
+        client: rawClient, model: rawModel, sessionId: 'canonical-review-fixture',
+        input: 70, output: 20, cacheRead: 25, cacheWrite: 5, cost, messages: 2
+      }] });
+      assert.equal(native.clientModels[canonicalClient][canonicalModel], 120);
+      const oldGraph = graph(date, [{
+        client: rawClient, modelId: rawModel, providerId: 'old-graph-provider',
+        tokens: { input: 10, output: 15, cacheRead: 65, cacheWrite: 10 }, cost: 10, messages: 3
+      }]);
+      const archive = captureLiveDailyHistory(captureDailyHistoryArchive({}, oldGraph), native, { todayKey: date });
+      const before = JSON.stringify(archive);
+      const selectedOnly = captureLiveDailyHistory({}, native, { todayKey: date });
+      const visible = graphFromDailyHistoryArchive([], archive, { todayKey: date });
+      assert.deepEqual(visible, graphFromDailyHistoryArchive([], selectedOnly, { todayKey: date }));
+      assert.equal(visible.contributions[0].clients.length, 1);
+      const cumulative = allTimeCumulativeFromArchive(archive);
+      assert.deepEqual(cumulative, allTimeCumulativeFromArchive(selectedOnly));
+      assert.equal(cumulative[canonicalClient].models[canonicalModel], 120);
+      assert.equal(cumulative[canonicalClient].costUsd, cost);
+      assert.deepEqual(cumulative[canonicalClient].modelComponents[canonicalModel], {
+        cacheReadTokens: 25, cacheWriteTokens: 5, outputTokens: 20, unclassifiedTokens: 0
+      });
+      assert.equal(JSON.stringify(archive), before, 'projection must preserve persisted raw keys and records');
+    });
+  }
+}
+
+for (const oldClient of ['pi', 'omp']) {
+  for (const legacy of [true, false]) {
+    test(`canonical overlap respects the ${legacy ? 'merged-era' : 'post-split'} ${oldClient} family boundary`, () => {
+      const date = '2026-07-09';
+      const selectedClient = oldClient === 'pi' ? 'omp' : 'pi';
+      const native = extractUsageFromTokscale({ entries: [{
+        client: selectedClient, model: 'CaseModel', input: 120, output: 0, cost: 1
+      }] });
+      const old = captureDailyHistoryArchive({}, graph(date, [client(oldClient, 'CaseModel', 100, 10, 1)]));
+      if (legacy) delete old.days[date].clientIdentityGeneration;
+      const archive = captureLiveDailyHistory(old, native, { todayKey: date });
+      const selectedOnly = captureLiveDailyHistory({}, native, { todayKey: date });
+      const visible = graphFromDailyHistoryArchive([], archive, { todayKey: date });
+      const cumulative = allTimeCumulativeFromArchive(archive);
+      assert.equal(cumulative[selectedClient].models.casemodel, 120);
+      assert.equal(cumulative[selectedClient].costUsd, 1);
+      if (legacy) {
+        assert.deepEqual(visible, graphFromDailyHistoryArchive([], selectedOnly, { todayKey: date }));
+        assert.deepEqual(cumulative, allTimeCumulativeFromArchive(selectedOnly));
+      } else {
+        assert.equal(visible.contributions[0].clients.length, 2);
+        assert.equal(cumulative[oldClient].models.casemodel, 100, 'independent post-split products still add');
+        assert.equal(cumulative[oldClient].costUsd, 10);
+      }
+    });
+  }
+}
+
+test('canonical overlap still carries archive-only observations for other clients and models', () => {
+  const date = '2026-07-09';
+  const old = captureDailyHistoryArchive({}, graph(date, [
+    client('claude', 'CaseModel', 100, 10, 1),
+    client('claude', 'archive-only', 3, 0.3, 1),
+    client('codex', 'casemodel', 7, 0.7, 1)
+  ]));
+  const native = extractUsageFromTokscale({ entries: [{ client: 'claude', model: 'CaseModel', input: 120, output: 0, cost: 1 }] });
+  const archive = captureLiveDailyHistory(old, native, { todayKey: date });
+  const visible = historyFrom(graphFromDailyHistoryArchive([], archive, { todayKey: date }), date);
+  assert.equal(visible.daily[0].tokens, 130);
+  const cumulative = allTimeCumulativeFromArchive(archive);
+  assert.equal(cumulative.claude.models.casemodel, 120);
+  assert.equal(cumulative.claude.models['archive-only'], 3);
+  assert.equal(cumulative.codex.models.casemodel, 7);
 });
