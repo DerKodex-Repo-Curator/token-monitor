@@ -589,12 +589,9 @@ function dailyHistoryCoverage(live, archive, ledgerKeys) {
     const costModels = native ? native.modelCosts : live.clientModelCosts?.[client] || {};
     const identities = !native && live.clientModelIds?.[client];
     if (Array.isArray(identities) && identities.length === 0) unknown.add(client);
-    for (const model of identities || new Set([...Object.keys(tokenModels), ...Object.keys(costModels)])) add(client, model);
-    // archivedPeriod drops aggregate zero keys. Explicit native zero sessions
-    // still own that model and must exclude a historical maximum.
-    if (native) for (const session of Object.values(native.sessions)) {
-      for (const model of session.canonicalModelIds || new Set([...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})])) add(client, model);
-    }
+    // Graph days use canonical IDs; retained live days use report display keys.
+    // Both name the same observation, without assigning its amount to each ID.
+    for (const model of new Set([...(identities || []), ...Object.keys(tokenModels), ...Object.keys(costModels)])) add(client, model);
     const tokens = Object.values(tokenModels).reduce((sum, n) => sum + numberValue(n), 0);
     const cost = Object.values(costModels).reduce((sum, n) => sum + numberValue(n), 0);
     const clientTokens = native ? native.totalTokens : numberValue(live.clients?.[client]);
@@ -603,6 +600,14 @@ function dailyHistoryCoverage(live, archive, ledgerKeys) {
       || clientCost - cost > 4 * Number.EPSILON * Math.max(cost, clientCost)) {
       unknown.add(normalizeClientName(client));
     }
+  }
+  // Frozen client snapshots retain session identities even when their aggregate
+  // clientModelIds metadata is absent. Zero sessions also own their model.
+  for (const [key, session] of Object.entries(live.sessions || {})) {
+    if (session.usageSource === 'codex-dots-local' || ledgerKeys.has(key)) continue;
+    if (Array.isArray(session.canonicalModelIds) && session.canonicalModelIds.length === 0) unknown.add(normalizeClientName(session.client));
+    for (const model of new Set([...(session.canonicalModelIds || []),
+      ...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})])) add(session.client, model);
   }
   // Unattributed aggregate usage may overlap any named historical partition.
   const attributed = [...clients].reduce((sum, client) => sum + numberValue(live.clients?.[client]), 0);
@@ -617,7 +622,7 @@ function dailyHistoryCoverage(live, archive, ledgerKeys) {
     let hasAttribution = names.size > 0;
     for (const session of Object.values(entry.periods || {})) {
       const keys = new Set([...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})]);
-      const identities = session.canonicalModelIds || keys;
+      const identities = new Set([...(session.canonicalModelIds || []), ...keys]);
       for (const model of identities) names.add(model);
       hasAttribution ||= [...identities].length > 0;
       const tokens = Object.values(session.models || {}).reduce((sum, n) => sum + numberValue(n), 0);

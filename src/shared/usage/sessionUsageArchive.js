@@ -82,10 +82,8 @@ function sessionModelCoverage(entry, session) {
     let cost = 0;
     for (const raw of keys) {
       const model = normalizeModelNameForClient(raw, retained.client || entry.client);
-      if (!Array.isArray(retained.canonicalModelIds)) {
-        if (!model || model === 'unknown') unknown = true;
-        else models.add(model);
-      }
+      if (!model || model === 'unknown') unknown = true;
+      else models.add(model);
       tokens += Math.max(0, numberValue(retained.models?.[raw]));
       cost += Math.max(0, numberValue(retained.modelCosts?.[raw]));
     }
