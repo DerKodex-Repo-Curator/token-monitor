@@ -82,7 +82,7 @@ function createUsageTransform(options = {}) {
   const store = options.store;
   const getSettings = options.getSettings || (() => ({}));
   const isExternalAgentActive = options.isExternalAgentActive || (() => false);
-  const readSnapshot = options.readSnapshot || readSessionUsageArchiveSnapshot;
+  const readSnapshot = options.readSnapshot || store?.snapshot || readSessionUsageArchiveSnapshot;
   const onCaptureFailure = options.onCaptureFailure || (() => {});
   const log = options.log || ((message) => console.log(message));
   const loadDailyHistoryFloor = createDailyHistoryFloorReader(options);
@@ -99,11 +99,11 @@ function createUsageTransform(options = {}) {
       // The headless agent owns migration and pruning while its PID is active.
       // Anchor projection must not turn Electron into a second archive writer.
       sessionArchive = isExternalAgentActive()
-        ? readSnapshot()
+        ? readSnapshot({ strict: true })
         : store.read();
     } catch (error) {
       log(`[session-archive] read failed: ${error.message}`);
-      sessionArchive = normalizeSessionUsageArchive({});
+      throw error;
     }
     return sessionArchive;
   }
@@ -119,13 +119,15 @@ function createUsageTransform(options = {}) {
     };
     try {
       const result = store.capture(summary, now);
-      sessionArchive = result.archive;
       if (result.error) throw result.error;
+      sessionArchive = result.archive;
     } catch (error) {
       finish('archive-write-failed');
       onCaptureFailure(error);
       log(`[session-archive] write failed: ${error.message}`);
-      return sessionArchive || ensureLoaded();
+      // A loaded object may be stale or contain an uncommitted mutation. Do
+      // not project it as a successful tick; DeviceState keeps its usagePart.
+      throw error;
     }
     finish();
     return sessionArchive;
@@ -158,18 +160,20 @@ function createUsageTransform(options = {}) {
       });
       visibleSummary = applyDailyHistoryAllTimeFloor(withSessions, loadDailyHistoryFloor());
     }
+    delete visibleSummary.sessionUsageArchiveFullScan;
     return settings.projectsEnabled === false ? visibleSummary : applyProjectRollups(visibleSummary);
   }
 
-  function transform(summary) {
+  function transform(summary, _reason, meta = {}) {
     const now = sessionUsageArchiveDate(summary);
     if (getSettings()?.sessionUsageArchiveEnabled === false) return project(summary, null, now);
+    if (meta.preview === true) return project(summary, readSnapshot({ strict: true }), now);
     if (isExternalAgentActive()) {
       try {
-        sessionArchive = store.refresh(now);
+        sessionArchive = store.refresh(now, { strict: true });
       } catch (error) {
         log(`[session-archive] refresh failed: ${error.message}`);
-        sessionArchive = sessionArchive || normalizeSessionUsageArchive({});
+        throw error;
       }
       return project(summary, sessionArchive, now);
     }
@@ -183,6 +187,12 @@ function createUsageTransform(options = {}) {
     // Drops the in-memory copy, so the next use reads the store again.
     forget() {
       sessionArchive = null;
+    },
+    // Unlike forget(), also drops the store's owning reference and connection.
+    // The same transform can safely load again if collection falls back here.
+    release() {
+      sessionArchive = null;
+      store.release();
     },
     // For a store that was just cleared: the empty archive is what it now holds.
     reset() {

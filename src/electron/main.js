@@ -30,6 +30,8 @@ const { createClaudeWebFetch } = require('./providers/claude/webFetch');
 const { createMimoExchangeFetch } = require('./providers/mimo/exchangeFetch');
 const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
 const antigravityOAuth = require('../shared/providers/antigravity/oauth');
+const workbuddyOAuth = require('../shared/providers/workbuddy/oauth');
+const { createWorkbuddyManagedAccounts } = require('./providers/workbuddy/managedAccounts');
 const {
   createWorkbuddyLocalAuth,
   isSupportedWorkbuddyLocalAppPlatform
@@ -187,15 +189,18 @@ const {
   normalizeHomeModuleOrder
 } = require('./renderer/homeModulePreferences');
 const {
+  APP_UPDATE_STARTUP_DELAY_MS,
   appUpdateInstallSupport,
   classifyAppUpdateError,
   checkLatestRelease,
   deriveAppUpdateAvailability,
   downloadedAppUpdateMatchesLatest,
   installFailureErrorKind,
+  latestForCurrentVersion,
   latestFromUpdaterInfo,
   mergeLatestReleaseMetadata,
   providerUpdateCheckAvailability,
+  RELEASES_URL,
   resolveAppUpdateCheckError,
   shouldDownloadAutomaticAppUpdate,
   shouldSkipAppUpdateCheck,
@@ -326,6 +331,8 @@ const {
   macActivationPolicyMode,
   mainWindowCloseAction,
   normalizeTrayModeSettings,
+  popoverBlurMatchesPress,
+  popoverToggleAction,
   shouldCreateTray,
   skipTaskbarForSettings,
   trayToggleAction
@@ -410,6 +417,7 @@ const {
   restoreFloatingBubbleWindow
 } = require('./floatingBubble');
 const { applyWindowsChrome } = require('./windowsChrome');
+const { installWindowsNonActivatingInput } = require('./windowsNonActivatingInput');
 const { canUseEdgeDock, createEdgeDockController, edgeDockSupported } = require('./edgeDock/controller');
 const { createFullScreenProbe } = require('./edgeDock/fullScreenProbe');
 const {
@@ -678,6 +686,7 @@ function defaultSettings() {
     // Third-party global reset predictions are opt-in and remain separate from
     // the account-specific limits wire shape.
     codexResetForecastEnabled: false,
+    workbuddyQuotaTotalEnabled: false,
     showCodexAdditionalLimits: true,
     showLimitUsed: parseBoolean(process.env.TOKEN_MONITOR_SHOW_LIMIT_USED, false),
     // Manual subscription metadata. Plain preferences, not credentials, so they
@@ -824,6 +833,8 @@ function electronLimitsConfig() {
     workbuddyDesktopSessionSupported,
     workbuddyDesktopSessionEnabled,
     workbuddyLocalSession: workbuddyDesktopSessionEnabled ? electronWorkbuddyLocalAuth.getSessionInfo() : {},
+    workbuddyLocalSessions: workbuddyDesktopSessionEnabled ? electronWorkbuddyLocalAuth.getSessionInfos() : [],
+    workbuddyManagedAccounts: workbuddyAccountsForRenderer(),
     defaultLimitProviders: defaultLimitProviders(),
     codexManagedAccounts: codexManagedAccountsForCollector(),
     antigravityManagedAccounts: antigravityManagedAccountsForCollector(),
@@ -924,6 +935,7 @@ function electronLimitsDeps() {
     onClaudeWebCookieRenewed: persistClaudeWebCookieRenewal,
     onStepfunTokenRenewed: persistStepfunTokenRenewal,
     onAntigravityCredentialsRenewed: persistAntigravityCredentialsRenewal,
+    resolveWorkbuddyManagedCredential: (account, options) => workbuddyAccountService().resolveCredential(account, options),
     onThirdPartyCredentialsRenewed: persistThirdPartyCredentialsRenewal,
     onThirdPartyAccountKeyResolved: persistThirdPartyAccountKey
   };
@@ -1119,6 +1131,50 @@ function codexManagedAccountsForCollector() {
 
 function normalizeAntigravityManagedAccounts(value) {
   return antigravityOAuth.normalizeManagedAccounts(value);
+}
+
+let workbuddyManagedAccountService = null;
+
+function workbuddyAccountsForRenderer() {
+  return workbuddyOAuth.normalizeManagedAccounts(settings?.workbuddyManagedAccounts);
+}
+
+function workbuddyAccountService() {
+  if (!workbuddyManagedAccountService) {
+    workbuddyManagedAccountService = createWorkbuddyManagedAccounts({
+      getAccounts: () => settings?.workbuddyManagedAccounts,
+      setAccounts: (accounts) => { settings.workbuddyManagedAccounts = accounts; },
+      saveSettings: () => saveSettings({ throwOnError: true }),
+      credentialStore: ensureCredentialStore(),
+      fetch: electronLimitsFetch(),
+      openExternal: (url) => shell.openExternal(url),
+      onChanged: (account, reason, options = {}) => {
+        pushSettingsToRenderer();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try { mainWindow.webContents.send('workbuddy:accounts', workbuddyAccountsForRenderer()); } catch (_) {}
+        }
+        const scope = { provider: 'workbuddy', accountId: account.id, accountKey: account.accountKey };
+        // Removal can uncover an independent app-owned session for this identity.
+        // Clear only the removed row, then rebuild the complete discovery union.
+        void queueLimitInvalidation(scope, reason === 'account-enabled' ? 'account-state' : reason, options)
+          .then(() => reason === 'account-removed'
+            ? queueLimitInvalidation({ provider: 'workbuddy' }, 'account-state', { refresh: true })
+            : undefined)
+          .catch(() => {});
+      }
+    });
+  }
+  return workbuddyManagedAccountService;
+}
+
+async function workbuddyAccountOperation(operation) {
+  try {
+    return await operation(workbuddyAccountService());
+  } catch (_) {
+    // Storage/transport errors may contain paths or credential material. IPC
+    // returns the bounded setup error and never forwards their raw message.
+    return { ok: false, errorCode: 'credentialStorageUnavailable' };
+  }
 }
 
 function antigravityAccountsForRenderer() {
@@ -2554,6 +2610,7 @@ function readSettings() {
     merged.homeLimitDisplayMode = normalizeHomeLimitDisplayMode(merged.homeLimitDisplayMode);
     merged.showHomeLimitProviderNames = parseBoolean(merged.showHomeLimitProviderNames, false);
     merged.codexResetForecastEnabled = parseBoolean(merged.codexResetForecastEnabled, false);
+    merged.workbuddyQuotaTotalEnabled = parseBoolean(merged.workbuddyQuotaTotalEnabled, false);
     merged.showCodexAdditionalLimits = parseBoolean(merged.showCodexAdditionalLimits, true);
     merged.opencodeLocalLimitsEnabled = parseBoolean(merged.opencodeLocalLimitsEnabled, false);
     delete merged.workbuddyLocalAppEnabled;
@@ -2614,6 +2671,7 @@ function readSettings() {
     }
     merged.codexManagedAccounts = normalizeCodexManagedAccounts(merged.codexManagedAccounts);
     merged.antigravityManagedAccounts = normalizeAntigravityManagedAccounts(merged.antigravityManagedAccounts);
+    merged.workbuddyManagedAccounts = workbuddyOAuth.normalizeManagedAccounts(merged.workbuddyManagedAccounts);
     merged.mimoManagedAccounts = normalizeMimoManagedAccounts(merged.mimoManagedAccounts);
     if (saved.keepAboveTaskbar !== undefined) {
       merged.keepAboveTaskbar = parseBoolean(saved.keepAboveTaskbar, false);
@@ -2793,7 +2851,22 @@ const usageTransform = createUsageTransform({
 // in-process collector and `usageTransform` above runs on this thread.
 let latestUsageHost = null;
 function createElectronUsageRuntime(options) {
-  latestUsageHost = createUsageHost(options, {
+  // A transformed delivery confirms the worker has taken over projection.
+  // The cold anchor's main-thread archive is then redundant. In-process
+  // deliveries have no such marker and keep/reload their own archive instead.
+  const releaseOnWorkerDelivery = (callback) => (summary, reason, meta) => {
+    if (meta?.transformed === true) {
+      try { usageTransform.release(); } catch (error) {
+        console.log(`[session-archive] release failed: ${error.message}`);
+      }
+    }
+    return callback?.(summary, reason, meta);
+  };
+  latestUsageHost = createUsageHost({
+    ...options,
+    onUpdate: releaseOnWorkerDelivery(options.onUpdate),
+    ...(options.onPreview ? { onPreview: releaseOnWorkerDelivery(options.onPreview) } : {})
+  }, {
     agentPidPath: AGENT_PID_PATH,
     transformSettings: usageTransformSettings(settings)
   });
@@ -3047,6 +3120,7 @@ function exportIntervalMs() {
   return Number.isFinite(v) && v >= 1000 ? v : DEFAULT_EXPORT_INTERVAL_MS;
 }
 let suppressNextBlurHide = false;
+let recentPopoverBlur = null;
 const providerTrayIcons = {};
 let registeredWindowToggleShortcut = '';
 let windowToggleShortcutRegistered = false;
@@ -5007,11 +5081,17 @@ function primeLocalStatsFromAnchor(usageOptions, widgetProducerOwner) {
   // reads low for anyone with an un-tracked client or retained sessions, and then
   // jumps when the first scan lands. Read-only on purpose: the capture step
   // records a fresh observation, and an anchor from hours ago is not one.
-  const visible = usageTransform.project(
-    deviceRecord,
-    settings?.sessionUsageArchiveEnabled === false ? null : usageTransform.ensureLoaded(),
-    sessionUsageArchiveDate(deviceRecord)
-  );
+  let visible;
+  try {
+    visible = usageTransform.project(
+      deviceRecord,
+      settings?.sessionUsageArchiveEnabled === false ? null : usageTransform.ensureLoaded(),
+      sessionUsageArchiveDate(deviceRecord)
+    );
+  } catch (error) {
+    sendStatus(false, { reason: `session-archive:${error.message}` });
+    return;
+  }
   localDevice = visible;
   localStats = withHistoryPreview(aggregateDevices([visible], 0), [visible]);
   // Through the normal publisher, not straight to the renderer: the tray reads
@@ -5148,6 +5228,7 @@ async function startStatsStream(options = {}) {
 
 function showPopover(clickPoint = null) {
   if (!mainWindow || mainWindow.isDestroyed() || !tray) return;
+  recentPopoverBlur = null;
   applyMacActivationPolicy();
   applyMacSpaceBehavior(true);
   applyWindowSettings();
@@ -5163,13 +5244,21 @@ function showPopover(clickPoint = null) {
 }
 
 function hidePopover() {
+  recentPopoverBlur = null;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mainWindow.isVisible()) mainWindow.hide();
 }
 
-function togglePopover(clickPoint = null) {
+function togglePopover(clickPoint = null, wasVisibleAtMouseDown = null, blurMatchedAtMouseDown = false) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isVisible() && mainWindow.isFocused()) hidePopover();
+  const action = popoverToggleAction({
+    visible: mainWindow.isVisible(),
+    focused: mainWindow.isFocused(),
+    visibleAtMouseDown: wasVisibleAtMouseDown,
+    blurMatchedAtMouseDown
+  });
+  recentPopoverBlur = null;
+  if (action === 'hide') hidePopover();
   else showPopover(clickPoint);
 }
 
@@ -5317,6 +5406,7 @@ function settingsForRenderer() {
     ...accountFieldProjection(settings, process.env),
     codexManagedAccounts: codexAccountsForRenderer(),
     antigravityManagedAccounts: antigravityAccountsForRenderer(),
+    workbuddyManagedAccounts: workbuddyAccountsForRenderer(),
     mimoManagedAccounts: mimoAccountsForRenderer(),
     ...accountStatusProjection(settings, process.env),
     limitAccountForms: limitAccountFormsForRenderer(),
@@ -5439,6 +5529,7 @@ function edgeDockAppearance(rendererSettings = settingsForRenderer()) {
     limitProviderHiddenItems: source.limitProviderHiddenItems,
     showLimitSource: source.showLimitSource,
     codexResetForecastEnabled: source.codexResetForecastEnabled,
+    workbuddyQuotaTotalEnabled: source.workbuddyQuotaTotalEnabled,
     claudePrepaidBalanceEnabled: source.claudePrepaidBalanceEnabled,
     // The dock's session rows carry the same context gauge as the Sessions
     // list, so its Remaining/Used preference has to reach this renderer too.
@@ -5751,6 +5842,7 @@ function ensureEdgeDockController() {
       return applyVibrancyMask(win, png, width, height);
     },
     primaryButtonDown: () => primaryButtonDown(process.platform),
+    installNonActivatingInput: (win) => installWindowsNonActivatingInput(win, { logger: (message) => console.log(message) }),
     performHaptic: (pattern, performanceTime) => performMacHaptic({ pattern, performanceTime }),
     isFullScreen: createFullScreenProbe({ platform: process.platform, screen, logger: (message) => console.log(message) }),
     // The dock card's Switch button runs the same swap the Limits view does,
@@ -5851,9 +5943,9 @@ function handleWindowToggleShortcut() {
   else focusExistingWindow();
 }
 
-function handleTrayToggle(_tray, clickPoint = null) {
+function handleTrayToggle(_tray, clickPoint = null, wasVisibleAtMouseDown = null, blurMatchedAtMouseDown = false) {
   const action = trayToggleAction(settings);
-  if (action === 'togglePopover') togglePopover(clickPoint);
+  if (action === 'togglePopover') togglePopover(clickPoint, wasVisibleAtMouseDown, blurMatchedAtMouseDown);
   else if (action === 'focusWindow') focusExistingWindow();
 }
 
@@ -6074,6 +6166,13 @@ function ensureTray() {
       };
     },
     onToggle: handleTrayToggle,
+    getWindowVisible: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()),
+    onMouseDown: (pressPoint) => {
+      const matched = popoverBlurMatchesPress({ recentBlur: recentPopoverBlur, pressPoint, now: performance.now() });
+      recentPopoverBlur = null;
+      return matched;
+    },
+    onCancelMouseDown: () => { recentPopoverBlur = null; },
     onOpenView: openViewFromTray,
     onRefresh: () => { void refreshFromTray(); },
     onSetTrayContent: setTrayContentFromMenu,
@@ -6560,6 +6659,9 @@ function configureNativeAppUpdater() {
   appUpdateNativeConfigured = true;
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
+  // Notes for every release between this version and the latest, not only the
+  // latest's, so the update card covers everything the user is about to receive.
+  autoUpdater.fullChangelog = true;
   autoUpdater.logger = console;
   autoUpdater.on('download-progress', (progress) => {
     setNativeAppUpdateState({
@@ -6646,7 +6748,7 @@ async function checkAppUpdateProvider() {
 function deriveAppUpdateState() {
   const block = settings?.appUpdate || {};
   const currentVersion = app.getVersion();
-  const latest = block.lastKnownLatest || null;
+  const latest = latestForCurrentVersion(block.lastKnownLatest || null, currentVersion);
   const dismissedVersion = block.dismissedVersion || null;
   const installSupport = appUpdateInstallSupport({ isPackaged: app.isPackaged, platform: process.platform, env: process.env });
   const availability = deriveAppUpdateAvailability({
@@ -6659,6 +6761,7 @@ function deriveAppUpdateState() {
   return {
     currentVersion,
     latest,
+    releasesUrl: RELEASES_URL,
     hasUpdate: availability.hasUpdate,
     showUpdateNotice: availability.showUpdateNotice,
     dismissedVersion,
@@ -6807,10 +6910,21 @@ function maybeRunBackgroundUpdateCheck() {
   runAppUpdateCheck({ force: false }).catch(() => {});
 }
 
+function scheduleStartupAppUpdateCheck() {
+  const timer = setTimeout(() => {
+    runAppUpdateCheck({ bypassCooldown: true }).catch(() => {});
+  }, APP_UPDATE_STARTUP_DELAY_MS);
+  timer.unref?.();
+}
+
 function startAppUpdateBackgroundChecks() {
   if (appUpdateBackgroundTimer) return;
   appUpdateBackgroundTimer = setInterval(maybeRunBackgroundUpdateCheck, 60 * 60 * 1000);
   appUpdateBackgroundTimer.unref?.();
+  // A machine that slept overnight should not wait for the next hourly tick to
+  // notice a release. Both still go through the cooldown.
+  powerMonitor.on('resume', maybeRunBackgroundUpdateCheck);
+  powerMonitor.on('unlock-screen', maybeRunBackgroundUpdateCheck);
 }
 
 function dismissAppUpdateVersion(version) {
@@ -7091,7 +7205,17 @@ function createWindow(boundsOverride, options = {}) {
   });
   win.on('blur', () => {
     nudgeTaskbarZOrder();
-    if (settings?.trayMode && !suppressNextBlurHide && !quitRequested) hidePopover();
+    if (settings?.trayMode && !suppressNextBlurHide && !quitRequested) {
+      const wasVisible = win.isVisible();
+      const point = wasVisible && process.platform === 'darwin' ? screen.getCursorScreenPoint() : null;
+      if (wasVisible) {
+        hidePopover();
+        // Cocoa can send this blur before Tray.mouse-down for the same click.
+        // The cursor point lets that later click identify its own blur without
+        // mistaking a quick click on another app followed by a tray click.
+        if (point && tray?.isPointerOverIcon?.(point)) recentPopoverBlur = { at: performance.now(), point };
+      }
+    }
     else if (!quitRequested) scheduleFloatingBubbleAutoCollapse();
   });
   win.on('resized', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
@@ -7679,6 +7803,7 @@ app.whenReady().then(() => {
       maskLimitAccountEmails: parseBoolean(patch.maskLimitAccountEmails ?? settings.maskLimitAccountEmails, false),
       claudePrepaidBalanceEnabled: parseBoolean(patch.claudePrepaidBalanceEnabled ?? settings.claudePrepaidBalanceEnabled, true),
       codexResetForecastEnabled: parseBoolean(patch.codexResetForecastEnabled ?? settings.codexResetForecastEnabled, false),
+      workbuddyQuotaTotalEnabled: parseBoolean(patch.workbuddyQuotaTotalEnabled ?? settings.workbuddyQuotaTotalEnabled, false),
       showCodexAdditionalLimits: parseBoolean(patch.showCodexAdditionalLimits ?? settings.showCodexAdditionalLimits, true),
       opencodeAmbientEnabled: parseBoolean(patch.opencodeAmbientEnabled ?? settings.opencodeAmbientEnabled, true),
       opencodeLocalLimitsEnabled: parseBoolean(patch.opencodeLocalLimitsEnabled ?? settings.opencodeLocalLimitsEnabled, false),
@@ -8140,6 +8265,11 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('app:openUserData', () => shell.openPath(app.getPath('userData')));
   ipcMain.handle('antigravity:accounts', () => antigravityAccountsForRenderer());
+  ipcMain.handle('workbuddy:accounts', () => workbuddyAccountsForRenderer());
+  ipcMain.handle('workbuddy:addAccount', (_event, realm) => workbuddyAccountOperation((service) => service.addAccount(realm)));
+  ipcMain.handle('workbuddy:cancelLogin', () => workbuddyManagedAccountService?.cancelLogin() || false);
+  ipcMain.handle('workbuddy:removeAccount', (_event, id) => workbuddyAccountOperation((service) => service.removeAccount(id)));
+  ipcMain.handle('workbuddy:setAccountEnabled', (_event, id, enabled) => workbuddyAccountOperation((service) => service.setAccountEnabled(id, enabled)));
   ipcMain.handle('antigravity:addAccount', () => addAntigravityManagedAccount());
   ipcMain.handle('antigravity:cancelLogin', () => cancelAntigravityManagedAccountLogin());
   ipcMain.handle('antigravity:setAccountEnabled', (_event, id, enabled) => setAntigravityManagedAccountEnabled(id, enabled));
@@ -9105,7 +9235,7 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
-  maybeRunBackgroundUpdateCheck();
+  scheduleStartupAppUpdateCheck();
   startAppUpdateBackgroundChecks();
 });
 
@@ -9118,6 +9248,7 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('before-quit', () => {
   quitRequested = true;
   antigravityOAuthLoginController?.abort();
+  workbuddyManagedAccountService?.cancelLogin();
   resetMacWidgetReloadThrottle();
   if (rateRefreshTimer) clearInterval(rateRefreshTimer);
   if (appUpdateBackgroundTimer) clearInterval(appUpdateBackgroundTimer);

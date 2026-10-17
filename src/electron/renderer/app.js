@@ -99,6 +99,7 @@ const LIMIT_PROVIDER_ACCOUNT_NODES = {
   kimi: { group: 'kimiAccountGroup', status: 'kimiAccountStatus' },
   copilot: { group: 'copilotAccountGroup', status: 'copilotApiTokenStatus' },
   mimo: { group: 'mimoAccountGroup', status: 'mimoAccountStatus' },
+  workbuddy: { group: 'workbuddyAccountGroup', status: 'workbuddyAccountStatus' },
   openrouter: { group: 'openrouterAccountGroup', status: 'openrouterStatus' },
   volcengine: { group: 'volcengineAccountGroup', status: 'volcengineAccountStatus' },
   thirdparty: { group: 'thirdpartyAccountGroup', status: 'thirdpartyStatus' }
@@ -308,7 +309,7 @@ function normalizeInitialViewValue(value, allowed, fallback) {
   return allowed.has(raw) ? raw : fallback;
 }
 
-const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), appUpdate: null, breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, windowVisible: new URLSearchParams(window.location.search).get('windowHidden') !== '1', stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, serviceStatus: null, serviceStatusBusy: false, serviceProvidersExpanded: false, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, serviceStatusTicker: null, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, systemDarkUi: false, tokscaleStatus: null, hubInfo: null, hubBuildStatus: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, factoryAccountExpanded: false, factoryPendingCheckSince: 0, clineAccountExpanded: false, clinePendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, volcengineAgentExpanded: false, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', antigravityAccountExpanded: false, antigravityAccountError: '', antigravitySignInBusy: false, copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', floatingBubble: initialFloatingBubble, suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false, toolSearchQuery: '', limitProviderSearchQuery: '', accountPanelMessages: {} };
+const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), appUpdate: null, breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, windowVisible: new URLSearchParams(window.location.search).get('windowHidden') !== '1', stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, serviceStatus: null, serviceStatusBusy: false, serviceProvidersExpanded: false, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, serviceStatusTicker: null, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, systemDarkUi: false, tokscaleStatus: null, hubInfo: null, hubBuildStatus: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, factoryAccountExpanded: false, factoryPendingCheckSince: 0, clineAccountExpanded: false, clinePendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, volcengineAgentExpanded: false, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', antigravityAccountExpanded: false, antigravityAccountError: '', antigravitySignInBusy: false, workbuddyAccountExpanded: false, workbuddyAccountError: '', workbuddySignInBusy: false, workbuddyCancelBusy: false, workbuddyMutationBusy: false, workbuddyLoginAttempt: 0, workbuddyLoginStatusKey: '', workbuddyAccountsRevision: 0, copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', floatingBubble: initialFloatingBubble, suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false, toolSearchQuery: '', limitProviderSearchQuery: '', accountPanelMessages: {} };
 state.devinAccountExpanded = false;
 state.devinPendingCheckSince = 0;
 state.icloudStatus = null;
@@ -478,16 +479,12 @@ Object.assign(els, {
   reportIssueButton: document.getElementById('reportIssueButton'),
   appUpdatePill: document.getElementById('appUpdatePill'),
   appUpdatePillAction: document.getElementById('appUpdatePillAction'),
-  appUpdatePillLabel: document.getElementById('appUpdatePillLabel'),
-  appUpdatePillRestart: document.getElementById('appUpdatePillRestart'),
-  appUpdatePillRestartLabel: document.getElementById('appUpdatePillRestartLabel'),
-  appUpdatePillDismiss: document.getElementById('appUpdatePillDismiss'),
+  appUpdatePillProgress: document.getElementById('appUpdatePillProgress'),
   appUpdatePopover: document.getElementById('appUpdatePopover'),
   appUpdatePopoverTitle: document.getElementById('appUpdatePopoverTitle'),
+  appUpdatePopoverSubtitle: document.getElementById('appUpdatePopoverSubtitle'),
   appUpdatePopoverBody: document.getElementById('appUpdatePopoverBody'),
-  appUpdatePopoverAction: document.getElementById('appUpdatePopoverAction'),
-  appUpdatePopoverRelease: document.getElementById('appUpdatePopoverRelease'),
-  appUpdatePopoverClose: document.getElementById('appUpdatePopoverClose'),
+  appUpdatePopoverDismiss: document.getElementById('appUpdatePopoverDismiss'),
   appUpdateInstalled: document.getElementById('appUpdateInstalled'),
   automaticAppUpdatesRow: document.getElementById('automaticAppUpdatesRow'),
   automaticAppUpdatesInput: document.getElementById('automaticAppUpdatesInput'),
@@ -500,7 +497,6 @@ Object.assign(els, {
   appUpdateNotesDetails: document.getElementById('appUpdateNotesDetails'),
   appUpdateNotesTitle: document.getElementById('appUpdateNotesTitle'),
   appUpdateNotesBody: document.getElementById('appUpdateNotesBody'),
-  appUpdateReleaseNotesButton: document.getElementById('appUpdateReleaseNotesButton'),
   appUpdateMessage: document.getElementById('appUpdateMessage'),
   titleIconInput: document.getElementById('titleIconInput'),
   tokenNumberAnimationInput: document.getElementById('tokenNumberAnimationInput'),
@@ -1391,6 +1387,14 @@ function formatActiveDuration(ms) {
 function versionText(value) {
   return value ? `v${value}` : 'unknown';
 }
+// The release-note card under the footer update button. It opens on hover the
+// way a tooltip does, because the button's own press is the update action.
+const APP_UPDATE_CARD_OPEN_DELAY_MS = 250;
+const APP_UPDATE_CARD_CLOSE_DELAY_MS = 150;
+let appUpdateCardOpenTimer = 0;
+let appUpdateCardCloseTimer = 0;
+let suppressAppUpdateCardFocusOpen = false;
+
 function setAppUpdatePillDisclosure(available) {
   const action = els.appUpdatePillAction;
   if (available) {
@@ -1403,59 +1407,69 @@ function setAppUpdatePillDisclosure(available) {
   action.removeAttribute('aria-controls');
   action.removeAttribute('aria-expanded');
 }
+function appUpdatePillStatus(s, mode) {
+  if (s.installStarting) return 'installing';
+  // A download starts with a fresh provider check, reported as `checking`.
+  if (s.installPhase === 'downloading' || (s.installPhase === 'checking' && s.installBusy)) return 'downloading';
+  if (mode === 'install') return 'downloaded';
+  if (mode === 'release') return 'release';
+  return 'available';
+}
+function appUpdateDownloadPercent(s) {
+  return s?.installPhase === 'downloading' && Number.isFinite(s.installProgress)
+    ? Math.max(0, Math.min(100, Math.round(s.installProgress)))
+    : 0;
+}
+function appUpdatePillLabel(status, percent) {
+  if (status === 'downloading') return t('settings.appUpdate.downloading', { percent });
+  if (status === 'downloaded') return t('settings.appUpdate.restart');
+  if (status === 'installing') return t('settings.appUpdate.installStarting');
+  if (status === 'release') return t('settings.appUpdate.viewRelease');
+  return t('settings.appUpdate.download');
+}
 function renderAppUpdatePill() {
   const s = state.appUpdate;
   const pill = els.appUpdatePill;
   if (!pill) return;
+  const action = els.appUpdatePillAction;
   const mode = appUpdatePresentationApi.appUpdateActionMode(s);
   const version = s?.latest?.version || s?.installVersion || '';
   if (!s || !mode || !version || !s.showUpdateNotice) {
     pill.classList.add('hidden');
-    pill.classList.remove('is-ready');
-    pill.setAttribute('title', '');
-    els.appUpdatePillLabel.textContent = '';
-    els.appUpdatePillAction.removeAttribute('title');
-    els.appUpdatePillAction.removeAttribute('aria-label');
-    els.appUpdatePillAction.disabled = false;
-    els.appUpdatePillRestart.classList.add('hidden');
-    els.appUpdatePillRestartLabel.textContent = '';
-    els.appUpdatePillRestart.disabled = false;
-    els.appUpdatePillRestart.removeAttribute('title');
-    els.appUpdatePillRestart.removeAttribute('aria-label');
+    hideAppUpdatePopover();
+    action.removeAttribute('aria-label');
+    action.removeAttribute('aria-disabled');
     setAppUpdatePillDisclosure(false);
     syncLiveTokenRateFooterState();
     return;
   }
-  const hasReleaseNotes = releaseNoteGroupsForCurrentLocale(s.latest).length > 0;
-  setAppUpdatePillDisclosure(hasReleaseNotes);
+  const status = appUpdatePillStatus(s, mode);
+  const percent = appUpdateDownloadPercent(s);
   pill.classList.remove('hidden');
-  pill.classList.toggle('is-ready', mode === 'install');
-  els.appUpdatePillDismiss.classList.toggle('hidden', mode === 'install' || s.installBusy);
-  pill.setAttribute('title', '');
-  const releaseLabel = hasReleaseNotes
-    ? t('settings.appUpdate.whatsNew', { version })
-    : (s.latest?.name || `v${version}`);
-  els.appUpdatePillAction.setAttribute('title', releaseLabel);
-  els.appUpdatePillAction.setAttribute('aria-label', releaseLabel);
-  els.appUpdatePillAction.disabled = mode === 'install' && !hasReleaseNotes && !s.latest?.htmlUrl;
-  els.appUpdatePillRestart.classList.toggle('hidden', mode !== 'install');
-  els.appUpdatePillRestart.disabled = Boolean(s.installBusy);
-  els.appUpdatePillRestartLabel.textContent = mode === 'install'
-    ? t('settings.appUpdate.restartShort')
-    : '';
-  els.appUpdatePillRestart.setAttribute('title', t('settings.appUpdate.ready'));
-  els.appUpdatePillRestart.setAttribute('aria-label', t('settings.appUpdate.restart'));
-  if (s.installPhase === 'downloading' && Number.isFinite(s.installProgress)) {
-    els.appUpdatePillLabel.textContent = `${Math.round(s.installProgress)}%`;
-  } else {
-    els.appUpdatePillLabel.textContent = mode === 'install'
-      ? `v${version}`
-      : `↑ v${version}`;
-  }
+  action.dataset.status = status;
+  els.appUpdatePillProgress.style.strokeDashoffset = String(100 - percent);
+  action.setAttribute('aria-label', appUpdatePillLabel(status, percent));
+  // aria-disabled rather than disabled: a disabled button stops receiving the
+  // pointer events that open the card, which is where the progress is shown.
+  if (s.installBusy) action.setAttribute('aria-disabled', 'true');
+  else action.removeAttribute('aria-disabled');
+  setAppUpdatePillDisclosure(true);
   syncLiveTokenRateFooterState();
 }
-function releaseNoteGroupsForCurrentLocale(latest) {
-  return appUpdatePresentationApi.releaseNoteGroupsForLocale(latest?.releaseNotes, currentLocale());
+function releaseNoteHistoryForCurrentLocale(latest) {
+  return appUpdatePresentationApi.releaseNoteHistoryForLocale(latest, currentLocale());
+}
+function buildAppUpdateNoteItemNode(item) {
+  const row = document.createElement('li');
+  const { lead, body } = appUpdatePresentationApi.splitReleaseNoteLead(item);
+  if (!lead) {
+    row.textContent = body;
+    return row;
+  }
+  const strong = document.createElement('strong');
+  strong.textContent = lead;
+  row.append(strong, document.createTextNode(/[:]$/.test(lead) ? ` ${body}` : body));
+  return row;
 }
 function buildAppUpdateNoteGroupNodes(groups) {
   return groups.map((group) => {
@@ -1466,58 +1480,169 @@ function buildAppUpdateNoteGroupNodes(groups) {
     title.textContent = String(group?.title || '');
     const list = document.createElement('ul');
     for (const item of Array.isArray(group?.items) ? group.items : []) {
-      const row = document.createElement('li');
-      row.textContent = String(item || '');
-      list.append(row);
+      list.append(buildAppUpdateNoteItemNode(String(item || '')));
     }
     section.append(title, list);
     return section;
   });
 }
+function buildAppUpdateReleaseLink(className, label, url) {
+  const link = document.createElement('button');
+  link.type = 'button';
+  link.className = `${className} app-update-release-link`;
+  link.dataset.releaseUrl = url;
+  link.textContent = label;
+  return link;
+}
+// One section per release, newest first. A single release is already named by the
+// heading above it, so it goes without its own version line.
+function buildAppUpdateReleaseNodes(entries) {
+  const showVersions = entries.length > 1;
+  return entries.map((entry) => {
+    const section = document.createElement('section');
+    section.className = 'app-update-release';
+    if (showVersions) {
+      const label = `v${entry.version}`;
+      const head = entry.htmlUrl
+        ? buildAppUpdateReleaseLink('app-update-release-version', label, entry.htmlUrl)
+        : Object.assign(document.createElement('div'), { className: 'app-update-release-version', textContent: label });
+      if (entry.htmlUrl) head.title = t('settings.appUpdate.viewFullRelease');
+      // A wrapper, because a stuck scroll-state container styles its descendants,
+      // not itself.
+      const wrapper = document.createElement('div');
+      wrapper.className = 'app-update-release-head';
+      wrapper.append(head);
+      section.append(wrapper);
+    }
+    // Every item: these are written summaries, so cutting them short hides whole
+    // groups (a release's fixes come last) rather than trimming noise.
+    section.append(...buildAppUpdateNoteGroupNodes(entry.groups));
+    return section;
+  });
+}
+function buildAppUpdateReleaseHistoryNodes(s) {
+  const history = releaseNoteHistoryForCurrentLocale(s?.latest);
+  const entries = history
+    .filter((entry, _index, all) => all.length > 1 || entry.groups.length > 0);
+  const nodes = buildAppUpdateReleaseNodes(entries);
+  // A single release has no version heading to open its page, so it gets an
+  // explicit link after its notes — even when the locale carries no groups and
+  // the link is the body's only node.
+  if (history.length === 1 && history[0]?.htmlUrl) {
+    nodes.push(buildAppUpdateReleaseLink('app-update-release-full', t('settings.appUpdate.viewFullRelease'), history[0].htmlUrl));
+  }
+  if (nodes.length > 0 && s?.latest?.releaseHistoryTruncated && s.releasesUrl) {
+    nodes.push(buildAppUpdateReleaseLink('app-update-release-older', t('settings.appUpdate.olderReleases'), s.releasesUrl));
+  }
+  return { entries, nodes };
+}
+// Download progress pushes many times a second. Rebuilding the notes on each one
+// would reset the reader's scroll position, so they are rebuilt only when what
+// they say changes.
+function appUpdateNotesContentKey(s) {
+  return JSON.stringify([currentLocale(), s?.currentVersion || '', s?.latest?.version || '', s?.latest?.releaseNoteHistory || null, s?.latest?.releaseNotes || null, Boolean(s?.latest?.releaseHistoryTruncated)]);
+}
+// The card explains; the button under it acts. A second action button in the
+// card only repeated the one the pointer had just passed over.
 function renderAppUpdatePopover(s) {
-  const version = s?.latest?.version || '';
-  const groups = releaseNoteGroupsForCurrentLocale(s?.latest);
   const mode = appUpdatePresentationApi.appUpdateActionMode(s);
-  if (!version || groups.length === 0 || !mode) {
-    if (els.appUpdatePopover.matches(':popover-open')) els.appUpdatePopover.hidePopover();
-    els.appUpdatePopoverTitle.textContent = '';
-    els.appUpdatePopoverBody.replaceChildren();
+  const version = s?.latest?.version || s?.installVersion || '';
+  if (!s || !mode || !version) {
+    hideAppUpdatePopover();
     return false;
   }
-  els.appUpdatePopoverTitle.textContent = t('settings.appUpdate.whatsNew', { version });
-  els.appUpdatePopoverBody.replaceChildren(...buildAppUpdateNoteGroupNodes(groups));
-  els.appUpdatePopoverAction.textContent = mode === 'install'
-    ? t('settings.appUpdate.restart')
-    : mode === 'download'
-      ? t('settings.appUpdate.download')
-      : t('settings.appUpdate.viewRelease');
-  els.appUpdatePopoverAction.disabled = Boolean(s.installBusy);
-  els.appUpdatePopoverRelease.classList.toggle('hidden', !s.latest?.htmlUrl);
+  const status = appUpdatePillStatus(s, mode);
+  const percent = appUpdateDownloadPercent(s);
+  const heading = {
+    available: [t('settings.appUpdate.availableTitle', { version }), t('settings.appUpdate.currentVersion', { version: s.currentVersion })],
+    release: [t('settings.appUpdate.availableTitle', { version }), t('settings.appUpdate.currentVersion', { version: s.currentVersion })],
+    downloading: [t('settings.appUpdate.downloading', { percent }), `v${version}`],
+    downloaded: [t('settings.appUpdate.readyTitle', { version }), t('settings.appUpdate.ready')],
+    installing: [t('settings.appUpdate.installStarting'), `v${version}`]
+  }[status];
+  els.appUpdatePopoverTitle.textContent = heading[0];
+  els.appUpdatePopoverSubtitle.textContent = heading[1];
+  const contentKey = appUpdateNotesContentKey(s);
+  if (els.appUpdatePopoverBody.dataset.contentKey !== contentKey) {
+    const { nodes } = buildAppUpdateReleaseHistoryNodes(s);
+    els.appUpdatePopoverBody.replaceChildren(...nodes);
+    els.appUpdatePopoverBody.dataset.contentKey = contentKey;
+    els.appUpdatePopoverBody.classList.toggle('hidden', nodes.length === 0);
+  }
+  els.appUpdatePopoverDismiss.classList.toggle('hidden', mode === 'install' || Boolean(s.installBusy));
   return true;
 }
 function positionAppUpdatePopover() {
   const rect = els.appUpdatePill.getBoundingClientRect();
   const width = Math.min(320, window.innerWidth - 24);
   const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width));
+  const bottom = Math.max(12, window.innerHeight - rect.top + 8);
   els.appUpdatePopover.style.width = `${width}px`;
   els.appUpdatePopover.style.left = `${left}px`;
-  els.appUpdatePopover.style.bottom = `${Math.max(12, window.innerHeight - rect.top + 8)}px`;
+  els.appUpdatePopover.style.bottom = `${bottom}px`;
+  els.appUpdatePopover.style.maxHeight = `${appUpdatePresentationApi.appUpdatePopoverMaxHeight({ viewportHeight: window.innerHeight, bottom })}px`;
+}
+function clearAppUpdateCardTimers() {
+  clearTimeout(appUpdateCardOpenTimer);
+  clearTimeout(appUpdateCardCloseTimer);
+  appUpdateCardOpenTimer = 0;
+  appUpdateCardCloseTimer = 0;
+}
+function showAppUpdatePopover() {
+  clearAppUpdateCardTimers();
+  if (els.appUpdatePill.classList.contains('hidden') || typeof els.appUpdatePopover.showPopover !== 'function') return false;
+  if (!renderAppUpdatePopover(state.appUpdate)) return false;
+  positionAppUpdatePopover();
+  if (!els.appUpdatePopover.matches(':popover-open')) els.appUpdatePopover.showPopover();
+  return true;
+}
+function hideAppUpdatePopover() {
+  clearAppUpdateCardTimers();
+  if (!els.appUpdatePopover?.matches(':popover-open')) return;
+  // Only focus that was inside the card goes back to the button. A card that
+  // closes because the pointer left it must not pull focus to the button.
+  const focusWasInside = els.appUpdatePopover.contains(document.activeElement);
+  els.appUpdatePopover.hidePopover();
+  if (focusWasInside && !els.appUpdatePill.classList.contains('hidden')) {
+    suppressAppUpdateCardFocusOpen = true;
+    els.appUpdatePillAction.focus();
+  }
+}
+function scheduleAppUpdatePopoverOpen() {
+  clearAppUpdateCardTimers();
+  if (els.appUpdatePopover.matches(':popover-open')) return;
+  appUpdateCardOpenTimer = setTimeout(showAppUpdatePopover, APP_UPDATE_CARD_OPEN_DELAY_MS);
+}
+function scheduleAppUpdatePopoverClose() {
+  clearAppUpdateCardTimers();
+  appUpdateCardCloseTimer = setTimeout(() => {
+    appUpdateCardCloseTimer = 0;
+    // Keyboard focus inside the card holds it open until focus leaves.
+    if (els.appUpdatePopover.contains(document.activeElement)) return;
+    hideAppUpdatePopover();
+  }, APP_UPDATE_CARD_CLOSE_DELAY_MS);
 }
 function renderAppUpdateNotes(s) {
   const version = s?.latest?.version || '';
-  const groups = releaseNoteGroupsForCurrentLocale(s?.latest);
-  const visible = Boolean(version && groups.length > 0);
-  els.appUpdateNotes.classList.toggle('hidden', !visible);
-  if (!visible) {
-    setSettingsAccordionExpanded(els.appUpdateNotes, els.appUpdateNotesToggle, els.appUpdateNotesDetails, false);
-    els.appUpdateNotesTitle.textContent = '';
-    els.appUpdateNotesBody.replaceChildren();
-    return;
-  }
+  const contentKey = appUpdateNotesContentKey(s);
+  if (els.appUpdateNotesBody.dataset.contentKey !== contentKey) {
+    const { entries, nodes } = version ? buildAppUpdateReleaseHistoryNodes(s) : { entries: [], nodes: [] };
+    const visible = Boolean(version && nodes.length > 0);
+    els.appUpdateNotes.classList.toggle('hidden', !visible);
+    if (!visible) {
+      setSettingsAccordionExpanded(els.appUpdateNotes, els.appUpdateNotesToggle, els.appUpdateNotesDetails, false);
+      els.appUpdateNotesTitle.textContent = '';
+      els.appUpdateNotesBody.replaceChildren();
+      delete els.appUpdateNotesBody.dataset.contentKey;
+      return;
+    }
 
-  els.appUpdateNotesTitle.textContent = t('settings.appUpdate.whatsNew', { version });
-  els.appUpdateNotesBody.replaceChildren(...buildAppUpdateNoteGroupNodes(groups));
-  els.appUpdateReleaseNotesButton.classList.toggle('hidden', !s.latest?.htmlUrl);
+    els.appUpdateNotesTitle.textContent = entries.length > 1
+      ? t('settings.appUpdate.changesSince', { version: s.currentVersion })
+      : t('settings.appUpdate.whatsNew', { version });
+    els.appUpdateNotesBody.replaceChildren(...nodes);
+    els.appUpdateNotesBody.dataset.contentKey = contentKey;
+  }
   if (s.hasUpdate && state.appUpdateNotesPresentedVersion !== version) {
     // The disclosure may have just changed from display:none. Commit its
     // collapsed grid once so the first automatic reveal can transition too.
@@ -2146,6 +2271,9 @@ const overflowText = window.TokenMonitorOverflowText.create({
   onLeave: () => requestAnimationFrame(() => {
     if (homeSessionRenderPending && state.breakdown === 'home'
       && visibleStatsSurface() === 'main' && state.stats) renderHome();
+    // A final stats update may have been held before reading or before painting.
+    // Reuse the refresh guards to catch up without waiting for another push.
+    if (state.openSession?.kind === 'session') void refreshOpenSessionDetail();
   })
 });
 
@@ -3157,8 +3285,52 @@ function limitProvidersForSubscriptions() {
 // kind says which shape is being recorded, so hiding the accounts only got in
 // the way of reaching them.
 function subscriptionAccountChoices() {
-  const visible = limitProvidersForSubscriptions()
-    .filter((provider) => provider?.provider && provider.status !== 'notConfigured');
+  const observed = limitProvidersForSubscriptions()
+    .filter((provider) => !limitProviderPresentationApi.isWorkbuddyPlaceholder(provider))
+    .map((provider) => ({ ...provider }));
+  const known = [...observed];
+  // Managed identities remain selectable before a first successful quota read.
+  for (const account of state.settings?.workbuddyManagedAccounts || []) {
+    if (!account.accountKey) continue;
+    const existing = known.find((provider) => provider.provider === 'workbuddy' && provider.accountKey === account.accountKey);
+    if (existing) {
+      if (!existing.accountName) existing.accountName = account.accountName;
+      if (!existing.accountEmail) existing.accountEmail = account.accountEmail;
+    } else {
+      known.push({ provider: 'workbuddy', status: 'notConfigured', accountKey: account.accountKey,
+        accountName: account.accountName, accountEmail: account.accountEmail, windows: [] });
+    }
+  }
+  const saved = state.settings?.subscriptions || [];
+  // A stored binding also names an account while a device or credential is gone.
+  for (const subscription of saved) {
+    if (!subscription.provider || !subscription.binding) continue;
+    const binding = subscription.binding;
+    const account = { provider: subscription.provider, status: 'notConfigured', windows: [],
+      accountKey: binding.accountKey || '', accountEmail: binding.accountEmail || '', accountName: binding.profileName || '' };
+    // Token/cookie-based providers heal rotated keys against the observed pool
+    // before a saved-only virtual row can claim the obsolete exact key.
+    const healed = subscription.provider === 'workbuddy' ? null
+      : subscriptionApi.matchProviderAccount(subscription, observed);
+    const existing = healed || known.find((provider) => {
+      if (provider.provider !== account.provider) return false;
+      if (account.accountKey) return accountIdentityApi.accountKeyFamily(provider).has(account.accountKey);
+      if (account.accountEmail) return String(provider.accountEmail || provider.email || '').toLowerCase() === account.accountEmail.toLowerCase();
+      if (account.accountName) return provider.accountName === account.accountName;
+      return !provider.accountKey && !provider.accountEmail && !provider.email && !provider.accountName;
+    });
+    if (existing) {
+      if (!existing.accountName) existing.accountName = account.accountName;
+      if (!existing.accountEmail) existing.accountEmail = account.accountEmail;
+    } else known.push(account);
+  }
+  const visible = known.filter((provider) => {
+    if (!provider?.provider) return false;
+    if (provider.status === 'ok') return true;
+    if (provider.accountKey || provider.accountEmail || provider.email || provider.accountName) return true;
+    return saved.some((subscription) => subscription.provider === provider.provider && subscription.binding
+      && !subscription.binding.accountKey && !subscription.binding.accountEmail && !subscription.binding.profileName);
+  });
   return visible.map((provider, index) => ({
     provider,
     value: subscriptionAccountValue(provider),
@@ -3169,13 +3341,12 @@ function subscriptionAccountChoices() {
   }));
 }
 
-// The picker's value for one choice, which is only ever compared against another
-// choice from the same freshly built list: distinct per account, stable for one
-// record. It carries the address as well, so the two accounts a provider reports
-// by address alone are two choices rather than one — while "is this the same
-// account?" stays with accountIdentity.sameAccount(), where the matcher's rule
-// lives.
+// A known key stays stable through renamed profiles, changed email metadata and
+// failed quota reads. Address-only accounts retain the legacy disambiguation.
 function subscriptionAccountValue(provider) {
+  const id = String(provider?.provider || '').trim().toLowerCase();
+  const key = String(provider?.accountKey || '').trim();
+  if (key) return [id, key].join('\0');
   return [
     String(provider?.provider || '').trim().toLowerCase(),
     String(provider?.accountKey || '').trim(),
@@ -3205,7 +3376,7 @@ function subscriptionSelectedAccount() {
 // replaced the old one.
 function subscriptionForAccount(list, providerId, account, excludeId) {
   if (!account) return null;
-  const accounts = limitProvidersForSubscriptions();
+  const accounts = subscriptionAccountChoices().map((choice) => choice.provider);
   return list.find((entry) => {
     if (entry.id === excludeId || entry.provider !== providerId) return false;
     const bound = subscriptionApi.matchProviderAccount(entry, accounts);
@@ -3355,7 +3526,7 @@ function renderSubscriptionRows() {
     return;
   }
 
-  const providers = limitProvidersForSubscriptions();
+  const providers = subscriptionAccountChoices().map((choice) => choice.provider);
   for (const subscription of list) {
     const account = subscriptionApi.matchProviderAccount(subscription, providers);
     const row = document.createElement('div');
@@ -4001,7 +4172,7 @@ function beginSubscriptionEdit(id) {
   }
   state.subscriptionEditingId = id;
 
-  const account = subscriptionApi.matchProviderAccount(subscription, limitProvidersForSubscriptions());
+  const account = subscriptionApi.matchProviderAccount(subscription, subscriptionAccountChoices().map((choice) => choice.provider));
   if (els.subscriptionProviderInput) els.subscriptionProviderInput.value = subscription.provider;
   renderSubscriptionPickers();
   if (account && els.subscriptionAccountInput) {
@@ -4170,7 +4341,7 @@ function limitDetailTooltipShouldHoldRender() {
 }
 
 function sessionTooltipShouldHoldRender() {
-  return Boolean(document.querySelector('.home-session-row .is-hover-reading, .home-session-meta .limit-detail-tooltip-wrap:hover, .home-session-meta .limit-detail-tooltip-wrap:focus-within, .row-context.limit-detail-tooltip-wrap:hover, .row-context.limit-detail-tooltip-wrap:focus-within, .row-label .limit-detail-tooltip-wrap:hover, .row-label .limit-detail-tooltip-wrap:focus-within, .session-group-run .is-hover-reading, .session-group-run:focus-within, .session-group-run .limit-detail-tooltip-wrap:hover, .session-group-run .limit-detail-tooltip-wrap:focus-within, .detail-ex-title.limit-detail-tooltip-wrap:hover, .detail-ex-title.limit-detail-tooltip-wrap:focus-within'));
+  return Boolean(document.querySelector('.home-session-row .is-hover-reading, .home-session-meta .limit-detail-tooltip-wrap:hover, .home-session-meta .limit-detail-tooltip-wrap:focus-within, .row-context.limit-detail-tooltip-wrap:hover, .row-context.limit-detail-tooltip-wrap:focus-within, .row-label .limit-detail-tooltip-wrap:hover, .row-label .limit-detail-tooltip-wrap:focus-within, .session-group-run .is-hover-reading, .session-group-run:focus-within, .session-group-run .limit-detail-tooltip-wrap:hover, .session-group-run .limit-detail-tooltip-wrap:focus-within, .detail-ex-title.is-hover-reading, .detail-heading.is-hover-reading, .detail-ex-title.limit-detail-tooltip-wrap:hover, .detail-ex-title.limit-detail-tooltip-wrap:focus-within'));
 }
 
 function flushPendingLimitDetailTooltipRender() {
@@ -4277,6 +4448,9 @@ const limitWindowsView = window.TokenMonitorLimitWindowsView.createLimitWindowsV
   currencyApi,
   formatCost,
   subscriptions: () => state.settings?.subscriptions,
+  // The quota group uses the complete observed pool, including non-reporting
+  // identities. Saved-only bindings stay in the form choices; the stable-key
+  // matcher refuses to heal their tooltips onto another observed account.
   subscriptionAccounts: () => limitProvidersForSubscriptions(),
   monthClientCosts: () => state.stats?.periods?.month?.clientCosts,
   resetForecast: () => ({ busy: state.codexResetForecastBusy, forecast: state.codexResetForecast })
@@ -4540,6 +4714,7 @@ function renderLimits() {
       state.settings?.showToolIcons !== false,
       state.settings?.claudePrepaidBalanceEnabled !== false,
       state.settings?.codexResetForecastEnabled === true,
+      state.settings?.workbuddyQuotaTotalEnabled === true,
       state.settings?.showCodexAdditionalLimits !== false,
       state.settings?.limitProviderHiddenItems || {},
       state.settings?.currency || '',
@@ -4802,14 +4977,93 @@ async function openSessionDetail({ client, sessionId, sessionCost, title, return
     period: state.period, detail: null, returnTo, titleFollowsSession: titleFollowsSession === true };
   state.openSession = request;
   renderSessionDetail({ loading: true });
+  // Read before the request, not after: a stats push that lands while it is in
+  // flight has to stay unseen so catch-up re-reads, instead of being written
+  // off against a response that predates it.
+  const liveSignature = sessionDetailLiveSignature();
   try {
     const detail = await window.tokenMonitor.getSessionDetail({ client, sessionId, period: request.period, sessionCost });
     if (state.openSession === request) {
       request.detail = detail;
+      request.liveSignature = liveSignature;
       applySessionDetailResult(request, { detail });
+      // The final push may have arrived while detail was still null. Use the
+      // existing guards now; a held/hidden page catches up on leave/visibility.
+      if (detail?.found === true && !detail.error) void refreshOpenSessionDetail();
     }
   } catch (_) {
     applySessionDetailResult(request, { error: true });
+  }
+}
+
+function sessionLiveStatsEntry(request) {
+  if (!request) return null;
+  const periodKey = request.period || state.period;
+  return request.client === 'reasonix'
+    ? state.stats?.nativeSessions?.[periodKey]?.[request.sessionId] || null
+    : state.stats?.periods?.[periodKey]?.sessions?.[`${request.client}:${request.sessionId}`] || null;
+}
+
+function sessionLiveCost(entry, client) {
+  return client === 'reasonix' ? Number(entry?.reportedCostUsd || 0) : Number(entry?.costUsd || 0);
+}
+
+function sessionDetailLiveSignature() {
+  const entry = sessionLiveStatsEntry(state.openSession);
+  if (!entry) return '';
+  return JSON.stringify([
+    Number(entry.totalTokens) || 0,
+    Number(entry.costUsd) || 0,
+    Number(entry.reportedCostUsd) || 0
+  ]);
+}
+
+// The Details page is a point-in-time reading of a transcript: the reader runs
+// once per click, while the session keeps accruing usage through `stats:push`
+// and the refresh timer. Without a re-read, someone who opens a session mid-run
+// watches every other surface move while this one freezes until it is reopened.
+// Re-read only when the reported usage actually changed, and never mid-hover: a
+// rebuild replaces every row node, which would kill a tooltip or focus the
+// reader is using. The next tick picks it up once the hover ends.
+async function refreshOpenSessionDetail() {
+  const request = state.openSession;
+  if (request?.kind !== 'session' || !request.detail || request.detailLiveBusy) return;
+  if (visibleStatsSurface() !== 'main' || sessionTooltipShouldHoldRender()) return;
+  // Paint a held result once, then check whether usage advanced during its read.
+  // An unchanged signature still avoids another transcript read.
+  if (request.detailRenderPending) {
+    request.detailRenderPending = false;
+    renderSessionDetail({ detail: request.detail, preserveScroll: true });
+  }
+  const signature = sessionDetailLiveSignature();
+  if (!signature || signature === request.liveSignature) return;
+  const sessionCost = sessionLiveCost(sessionLiveStatsEntry(request), request.client);
+  request.detailLiveBusy = true;
+  let readSucceeded = false;
+  try {
+    const detail = await window.tokenMonitor.getSessionDetail({
+      client: request.client, sessionId: request.sessionId, period: request.period, sessionCost
+    });
+    if (state.openSession !== request) return;
+    // Readers resolve filesystem failures as payloads rather than rejecting.
+    // Keep the last good snapshot and signature so the next tick can retry.
+    if (!detail || detail.found !== true || detail.error) return;
+    request.sessionCost = sessionCost;
+    request.detail = detail;
+    request.liveSignature = signature;
+    readSucceeded = true;
+    // The reader can start a hover while the read is in flight, so the hold is
+    // rechecked here rather than trusted from the call site.
+    if (sessionTooltipShouldHoldRender()) { request.detailRenderPending = true; return; }
+    renderSessionDetail({ detail, preserveScroll: true });
+  } catch (_) {
+    // Keep the last good reading; the next stats tick tries again.
+  } finally {
+    request.detailLiveBusy = false;
+    // Leave can run while busy. A successful read checks for a final push via
+    // the same visibility/hold/signature guards; failures wait for a later retry.
+    if (readSucceeded && state.openSession === request
+      && sessionDetailLiveSignature() !== request.liveSignature) void refreshOpenSessionDetail();
   }
 }
 
@@ -4837,13 +5091,23 @@ function sessionDetailBack() {
   closeSessionDetail();
 }
 
-function renderSessionDetail({ detail, loading, error } = {}) {
+function renderSessionDetail({ detail, loading, error, preserveScroll = false } = {}) {
   els.breakdown.classList.add('hidden');
   els.sessionDetail.classList.remove('hidden');
   els.sessionDetailHead.classList.remove('hidden');
   const head = els.sessionDetailHead;       // static layer — rows scroll independently below it
   const container = els.sessionDetail;
   container.classList.remove('session-group-list');
+  // Anchor the row being read: new content can grow above or below it, and
+  // token sorting can reorder exchanges without changing the total height.
+  const previousScroll = preserveScroll ? captureSessionDetailScroll(container) : null;
+  // A reader who opened an exchange keeps it open; a rebuild that collapsed it
+  // would look like the page had reset itself under them.
+  const expandedKeys = preserveScroll
+    ? new Set([...container.children]
+      .filter((node) => node.classList.contains('expanded'))
+      .map((node) => node.dataset.exchangeKey))
+    : null;
   head.replaceChildren();
   container.replaceChildren();
 
@@ -4872,7 +5136,38 @@ function renderSessionDetail({ detail, loading, error } = {}) {
   head.append(sort);
 
   const max = Math.max(1, ...rows.map((row) => row.value));
-  for (const row of rows) container.append(exchangeNode(row, max));
+  for (const row of rows) container.append(exchangeNode(row, max, expandedKeys?.has(row.key) === true));
+  if (previousScroll) restoreSessionDetailScroll(container, previousScroll);
+}
+
+function captureSessionDetailScroll(container) {
+  const top = container.scrollTop;
+  if (top === 0) return { top };
+  const viewportTop = container.getBoundingClientRect().top + container.clientTop;
+  for (const exchange of container.children) {
+    if (!exchange.dataset.exchangeKey || exchange.getBoundingClientRect().bottom <= viewportTop) continue;
+    const candidates = [exchange.querySelector('.detail-ex-head')];
+    if (exchange.classList.contains('expanded')) candidates.push(...exchange.querySelectorAll('.detail-turn'));
+    const node = candidates.find(candidate => candidate && candidate.getBoundingClientRect().bottom > viewportTop);
+    if (node) return {
+      top, exchangeKey: exchange.dataset.exchangeKey, turnKey: node.dataset.key,
+      offset: node.getBoundingClientRect().top - viewportTop
+    };
+  }
+  return { top };
+}
+
+function restoreSessionDetailScroll(container, anchor) {
+  const exchange = [...container.children].find(node => node.dataset.exchangeKey === anchor.exchangeKey);
+  const node = exchange && (anchor.turnKey
+    ? [...exchange.querySelectorAll('.detail-turn')].find(turn => turn.dataset.key === anchor.turnKey)
+    : exchange.querySelector('.detail-ex-head'));
+  if (node && anchor.top > 0) {
+    const viewportTop = container.getBoundingClientRect().top + container.clientTop;
+    container.scrollTop += node.getBoundingClientRect().top - viewportTop - anchor.offset;
+  } else {
+    container.scrollTop = anchor.top;
+  }
 }
 
 function sessionDetailTitle() {
@@ -4885,7 +5180,9 @@ function sessionDetailTitle() {
   const session = request?.client === 'reasonix'
     ? state.stats?.nativeSessions?.[period]?.[request.sessionId]
     : state.stats?.periods?.[period]?.sessions?.[`${request?.client}:${request?.sessionId}`];
-  return session?.title || request?.title || '';
+  return sessionRowsApi.sessionTitleForDisplay({
+    client: request?.client, title: session?.title || request?.title
+  });
 }
 
 function refreshSessionDetailHeading() {
@@ -5087,7 +5384,7 @@ function detailNote(text) {
   return note;
 }
 
-function exchangeNode(row, max) {
+function exchangeNode(row, max, expanded = false) {
   const wrap = document.createElement('div');
   wrap.className = 'detail-exchange';
   wrap.innerHTML = '<div class="detail-ex-head"><span class="detail-chev">▸</span>'
@@ -5118,10 +5415,17 @@ function exchangeNode(row, max) {
   const turnsEl = wrap.querySelector('.detail-turns');
   for (const turn of row.turns) turnsEl.append(turnNode(turn));
 
-  const head = wrap.querySelector('.detail-ex-head');
-  head.addEventListener('click', () => {
-    const collapsed = turnsEl.classList.toggle('hidden');
-    wrap.querySelector('.detail-chev').textContent = collapsed ? '▸' : '▾';
+  // Row keys are assigned in transcript order before display sorting, so
+  // equal or missing timestamps do not reopen or anchor a different exchange.
+  wrap.dataset.exchangeKey = row.key;
+  const setExpanded = (open) => {
+    turnsEl.classList.toggle('hidden', !open);
+    wrap.classList.toggle('expanded', open);
+    wrap.querySelector('.detail-chev').textContent = open ? '▾' : '▸';
+  };
+  setExpanded(expanded);
+  wrap.querySelector('.detail-ex-head').addEventListener('click', () => {
+    setExpanded(turnsEl.classList.contains('hidden'));
   });
   return wrap;
 }
@@ -5129,6 +5433,7 @@ function exchangeNode(row, max) {
 function turnNode(turn) {
   const el = document.createElement('div');
   el.className = 'detail-turn';
+  el.dataset.key = turn.key;
   const tk = turn.tokens || {};
   // "cache" folds cache reads + cache writes (Claude's cache_creation) into one bucket so the
   // in/out/cache breakdown sums to the turn total; reason is an informational subset of out.
@@ -5850,7 +6155,7 @@ function homeLimitRows() {
   return homeOverviewApi.homeLimitAccountsForProviders({
     // Hidden rows go before the compact pick, so Antigravity's tightest window
     // per group is chosen among the ones the user still shows.
-    providers: (state.stats?.limits?.providers || []).map((provider) => ({
+    providers: limitWindowsView.collapseWorkbuddyAccounts(state.stats?.limits?.providers || []).map((provider) => ({
       ...provider,
       windows: limitProviderPresentationApi.limitProviderCompactWindows(
         provider,
@@ -6968,6 +7273,7 @@ function render() {
       state.openSession.renderOptions = null;
       renderSessionDetail(options);
     }
+    void refreshOpenSessionDetail();
   } else {
     els.homePanel.classList.add('hidden');
     els.limitsPanel.classList.add('hidden');
@@ -9062,6 +9368,7 @@ function syncSettingsForm() {
     if (limitProviderAccountGroup(form.id)) renderExternalProviderStatus(form.id);
   }
   renderAntigravityStatus();
+  renderWorkbuddyStatus();
   renderMimoStatus();
   renderCopilotStatus();
   renderViewPreferences();
@@ -11577,6 +11884,12 @@ const LIMIT_PROVIDER_SETTINGS = {
     descKey: 'settings.limits.codexResetForecastDesc',
     defaultValue: false
   }],
+  workbuddy: [{
+    key: 'workbuddyQuotaTotalEnabled',
+    titleKey: 'settings.workbuddy.showQuotaTotal',
+    descKey: 'settings.workbuddy.showQuotaTotalDesc',
+    defaultValue: false
+  }],
   opencode: [{
     key: 'opencodeLocalLimitsEnabled',
     titleKey: 'settings.limits.opencodeLocalLimits',
@@ -12376,7 +12689,7 @@ els.breakdown.addEventListener('click', (event) => {
   }
   const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
   const client = rowEl.dataset.client || '';
-  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy') return;
+  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy' && client !== 'pi' && client !== 'omp') return;
   if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
   const match = key.match(/^session:([^:]+):(.+)$/);
   if (!match) return;
@@ -13113,34 +13426,69 @@ async function runAppUpdateAction() {
 }
 
 els.appUpdatePillAction.addEventListener('click', async () => {
-  if (!renderAppUpdatePopover(state.appUpdate) || typeof els.appUpdatePopover.showPopover !== 'function') {
-    if (appUpdatePresentationApi.appUpdateActionMode(state.appUpdate) === 'install') {
-      const url = state.appUpdate?.latest?.htmlUrl;
-      if (url) await window.tokenMonitor.openExternal(url);
-      return;
-    }
-    await runAppUpdateAction();
+  // While a download or install is under way the press shows its progress.
+  if (els.appUpdatePillAction.getAttribute('aria-disabled') === 'true') {
+    showAppUpdatePopover();
     return;
   }
-  positionAppUpdatePopover();
-  els.appUpdatePopover.showPopover();
-  els.appUpdatePopoverAction.focus();
-});
-
-els.appUpdatePillRestart.addEventListener('click', async () => {
+  if (appUpdatePresentationApi.appUpdateActionMode(state.appUpdate) === 'release') hideAppUpdatePopover();
   await runAppUpdateAction();
 });
 
-els.appUpdatePillDismiss.addEventListener('click', async () => {
-  const version = state.appUpdate?.latest?.version;
-  if (!version) return;
-  state.appUpdate = await window.tokenMonitor.dismissAppUpdate(version);
-  if (els.appUpdatePopover.matches(':popover-open')) els.appUpdatePopover.hidePopover();
-  renderAppUpdatePill();
-});
+for (const target of [els.appUpdatePillAction, els.appUpdatePopover]) {
+  target.addEventListener('pointerenter', (event) => {
+    if (event.pointerType === 'touch') return;
+    if (target === els.appUpdatePopover || els.appUpdatePopover.matches(':popover-open')) clearAppUpdateCardTimers();
+    else scheduleAppUpdatePopoverOpen();
+  });
+  target.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'touch') return;
+    scheduleAppUpdatePopoverClose();
+  });
+}
 
-els.appUpdatePopoverClose.addEventListener('click', () => {
-  els.appUpdatePopover.hidePopover();
+// Keyboard users get the card on focus, the same moment pointer users get it on
+// hover, and Tab then moves into it rather than past it.
+els.appUpdatePillAction.addEventListener('focus', () => {
+  if (suppressAppUpdateCardFocusOpen) {
+    suppressAppUpdateCardFocusOpen = false;
+    return;
+  }
+  if (els.appUpdatePillAction.matches(':focus-visible')) showAppUpdatePopover();
+});
+els.appUpdatePillAction.addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab' || event.shiftKey || !els.appUpdatePopover.matches(':popover-open')) return;
+  // Dismiss while it is offered; otherwise the notes body, which is a focusable
+  // scroller. A generic button search lands on a release link deep in the notes,
+  // or finds nothing at all once Dismiss is hidden during an install.
+  const dismiss = els.appUpdatePopoverDismiss.classList.contains('hidden') || els.appUpdatePopoverDismiss.disabled
+    ? null
+    : els.appUpdatePopoverDismiss;
+  const target = dismiss || (els.appUpdatePopoverBody.classList.contains('hidden') ? null : els.appUpdatePopoverBody);
+  if (!target) return;
+  event.preventDefault();
+  target.focus();
+});
+for (const target of [els.appUpdatePillAction, els.appUpdatePopover]) {
+  target.addEventListener('focusout', (event) => {
+    const next = event.relatedTarget;
+    if (next && (els.appUpdatePopover.contains(next) || next === els.appUpdatePillAction)) return;
+    if (els.appUpdatePopover.matches(':hover') || els.appUpdatePillAction.matches(':hover')) return;
+    hideAppUpdatePopover();
+  });
+}
+
+// A manual popover, so a press on the button is not also a light dismiss: the
+// card stays up to show the download it just started. Outside presses and Escape
+// are handled here instead.
+document.addEventListener('pointerdown', (event) => {
+  if (!els.appUpdatePopover.matches(':popover-open')) return;
+  if (els.appUpdatePopover.contains(event.target) || els.appUpdatePill.contains(event.target)) return;
+  hideAppUpdatePopover();
+}, true);
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !els.appUpdatePopover.matches(':popover-open')) return;
+  hideAppUpdatePopover();
 });
 
 els.appUpdatePopover.addEventListener('toggle', (event) => {
@@ -13148,23 +13496,24 @@ els.appUpdatePopover.addEventListener('toggle', (event) => {
   if (els.appUpdatePillAction.hasAttribute('aria-haspopup')) {
     els.appUpdatePillAction.setAttribute('aria-expanded', String(open));
   }
-  if (!open) {
-    const active = document.activeElement;
-    if (active === document.body || active === els.appUpdatePopover || els.appUpdatePopover.contains(active)) {
-      els.appUpdatePillAction.focus();
-    }
-  }
 });
 
-els.appUpdatePopoverAction.addEventListener('click', async () => {
-  els.appUpdatePopover.hidePopover();
-  await runAppUpdateAction();
+els.appUpdatePopoverDismiss.addEventListener('click', async () => {
+  const version = state.appUpdate?.latest?.version;
+  if (!version) return;
+  hideAppUpdatePopover();
+  state.appUpdate = await window.tokenMonitor.dismissAppUpdate(version);
+  renderAppUpdatePill();
+  renderSettingsAppUpdateRow();
 });
 
-els.appUpdatePopoverRelease.addEventListener('click', async () => {
-  const url = state.appUpdate?.latest?.htmlUrl;
-  if (url) await window.tokenMonitor.openExternal(url);
-});
+for (const container of [els.appUpdatePopoverBody, els.appUpdateNotesBody]) {
+  container.addEventListener('click', async (event) => {
+    const link = event.target.closest('[data-release-url]');
+    if (!link || !container.contains(link)) return;
+    await window.tokenMonitor.openExternal(link.dataset.releaseUrl);
+  });
+}
 
 window.addEventListener('resize', () => {
   if (els.appUpdatePopover.matches(':popover-open')) positionAppUpdatePopover();
@@ -13178,11 +13527,6 @@ els.appUpdateCheckButton.addEventListener('click', async () => {
 
 els.appUpdateViewReleaseButton.addEventListener('click', async () => {
   await runAppUpdateAction();
-});
-
-els.appUpdateReleaseNotesButton.addEventListener('click', async () => {
-  const url = state.appUpdate?.latest?.htmlUrl;
-  if (url) await window.tokenMonitor.openExternal(url);
 });
 
 window.tokenMonitor.onSettingsPush?.((next) => {
@@ -13258,6 +13602,7 @@ function renderStatsUpdate() {
   if (!isSettingsSurfaceVisible()) return;
   renderCodexAccounts();
   renderMimoStatus();
+  renderWorkbuddyStatus();
   renderSettingsSummaries();
   renderLimitProviderCheckboxes();
   renderToolPreferences();
@@ -14915,6 +15260,239 @@ function localProviderStatuses(name) {
     ? localProviders
     : (state.stats?.limits?.providers || []);
   return providers.filter((provider) => provider.provider === name);
+}
+
+function workbuddyAccountError(code, fallback = 'loginFailed') {
+  const keys = {
+    TIMEOUT: 'loginTimeout',
+    STATE_MISMATCH: 'loginStateMismatch',
+    INVALID_STATE: 'loginStateMismatch',
+    INVALID_LOGIN_URL: 'loginStateMismatch',
+    CONTEXT_CHANGED: 'loginStateMismatch',
+    credentialStorageUnavailable: 'credentialStorageUnavailable',
+    PERSISTENCE_FAILED: 'credentialStorageUnavailable',
+    ROLLBACK_FAILED: 'credentialStorageUnavailable',
+    loginInProgress: 'loginInProgress'
+  };
+  return t(`settings.workbuddy.${Object.hasOwn(keys, code) ? keys[code] : fallback}`);
+}
+
+function applyWorkbuddyAccounts(accounts) {
+  if (!state.settings || !Array.isArray(accounts)) return;
+  state.workbuddyAccountsRevision = (state.workbuddyAccountsRevision || 0) + 1;
+  state.settings.workbuddyManagedAccounts = accounts;
+  renderWorkbuddyStatus();
+  renderSettingsSummaries();
+  renderSubscriptionSettings();
+}
+
+async function mutateWorkbuddyAccount(id, operation, enabled) {
+  if (state.workbuddyMutationBusy || state.workbuddySignInBusy || state.workbuddyCancelBusy) return;
+  state.workbuddyMutationBusy = true;
+  state.workbuddyAccountError = '';
+  renderWorkbuddyStatus();
+  try {
+    const api = window.tokenMonitor.workbuddy;
+    const result = operation === 'remove'
+      ? await api.removeAccount(id)
+      : await api.setAccountEnabled(id, enabled);
+    if (!result?.ok) {
+      state.workbuddyAccountError = workbuddyAccountError(result?.errorCode,
+        operation === 'remove' ? 'removeFailed' : 'toggleFailed');
+    } else {
+      applyWorkbuddyAccounts(result.accounts);
+      refreshStats({ force: true }).catch(() => {});
+    }
+  } catch (_) {
+    state.workbuddyAccountError = workbuddyAccountError('', operation === 'remove' ? 'removeFailed' : 'toggleFailed');
+  } finally {
+    state.workbuddyMutationBusy = false;
+    renderWorkbuddyStatus();
+  }
+}
+
+function finishWorkbuddyLogin(attempt, result) {
+  if (state.workbuddyLoginAttempt !== attempt) return;
+  if (state.workbuddyCancelBusy) {
+    state.workbuddyPendingLoginResult = { attempt, result };
+    return;
+  }
+  state.workbuddySignInBusy = false;
+  state.workbuddyAccountError = '';
+  if (result?.ok) {
+    applyWorkbuddyAccounts(result.accounts);
+    state.workbuddyLoginStatusKey = '';
+    refreshStats({ force: true }).catch(() => {});
+  } else if (['CANCELED', 'CANCELLED'].includes(result?.errorCode)) {
+    state.workbuddyLoginStatusKey = 'loginCancelled';
+  } else {
+    state.workbuddyLoginStatusKey = '';
+    state.workbuddyAccountError = workbuddyAccountError(result?.errorCode);
+  }
+  renderWorkbuddyStatus();
+}
+
+async function startWorkbuddyLogin(realm) {
+  if (!['cn', 'ai'].includes(realm) || state.workbuddySignInBusy || state.workbuddyCancelBusy || state.workbuddyMutationBusy) return;
+  const attempt = (state.workbuddyLoginAttempt || 0) + 1;
+  state.workbuddyLoginAttempt = attempt;
+  state.workbuddySignInBusy = true;
+  state.workbuddyPendingLoginResult = null;
+  state.workbuddyAccountError = '';
+  state.workbuddyLoginStatusKey = 'loginStatus';
+  renderWorkbuddyStatus();
+  let result;
+  try {
+    result = await window.tokenMonitor.workbuddy.addAccount(realm);
+  } catch (_) {
+    result = { ok: false };
+  }
+  finishWorkbuddyLogin(attempt, result);
+}
+
+async function cancelWorkbuddyLogin() {
+  if (!state.workbuddySignInBusy || state.workbuddyCancelBusy) return;
+  state.workbuddyCancelBusy = true;
+  state.workbuddyAccountError = '';
+  renderWorkbuddyStatus();
+  let cancelled = false;
+  try {
+    const result = await window.tokenMonitor.workbuddy.cancelLogin();
+    cancelled = result === true || result?.ok === true;
+  } catch (_) {}
+  state.workbuddyCancelBusy = false;
+  if (cancelled) {
+    // A cancelled IPC promise may settle later, including after the next login.
+    state.workbuddyLoginAttempt = (state.workbuddyLoginAttempt || 0) + 1;
+    state.workbuddySignInBusy = false;
+    state.workbuddyPendingLoginResult = null;
+    state.workbuddyLoginStatusKey = 'loginCancelled';
+  } else if (state.workbuddyPendingLoginResult) {
+    const pending = state.workbuddyPendingLoginResult;
+    state.workbuddyPendingLoginResult = null;
+    finishWorkbuddyLogin(pending.attempt, pending.result);
+  } else {
+    state.workbuddyAccountError = workbuddyAccountError('', 'cancelFailed');
+  }
+  renderWorkbuddyStatus();
+}
+
+function renderWorkbuddyStatus() {
+  const list = document.getElementById('workbuddyAccountList');
+  if (!list || !state.settings) return;
+  const accounts = Array.isArray(state.settings.workbuddyManagedAccounts) ? state.settings.workbuddyManagedAccounts : [];
+  const busy = Boolean(state.workbuddySignInBusy || state.workbuddyCancelBusy || state.workbuddyMutationBusy);
+  accountShellApi.render({
+    status: document.getElementById('workbuddyAccountStatus'),
+    statusText: accounts.length
+      ? t('settings.workbuddy.connected', { linked: accounts.filter((a) => a.enabled !== false).length, total: accounts.length })
+      : t('settings.workbuddy.notConfigured'),
+    progress: document.getElementById('workbuddyLoginStatus'),
+    progressText: state.workbuddyCancelBusy
+      ? t('settings.workbuddy.cancelling')
+      : state.workbuddyLoginStatusKey ? t(`settings.workbuddy.${state.workbuddyLoginStatusKey}`) : '',
+    error: document.getElementById('workbuddyAccountErrorMessage'),
+    errorText: state.workbuddyAccountError
+  });
+  for (const [id, key] of [['workbuddyAddCnAccountButton', 'addCnAccount'], ['workbuddyAddAiAccountButton', 'addAiAccount']]) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.disabled = busy;
+    button.textContent = t(`settings.workbuddy.${key}`);
+  }
+  const cancel = document.getElementById('workbuddyCancelLoginButton');
+  if (cancel) {
+    cancel.classList.toggle('hidden', !state.workbuddySignInBusy && !state.workbuddyCancelBusy);
+    cancel.disabled = Boolean(state.workbuddyCancelBusy);
+  }
+  list.replaceChildren();
+  if (!accounts.length) {
+    const empty = document.createElement('p');
+    empty.className = 'settings-note';
+    empty.textContent = t('settings.workbuddy.empty');
+    list.append(empty);
+  }
+  const providers = localProviderStatuses('workbuddy');
+  accounts.forEach((account, index) => {
+    const name = accountIdentityApi.accountTitleLabel({ provider: 'workbuddy', ...account }, accounts, {
+      maskEmail: state.settings.maskLimitAccountEmails === true, index
+    }) || t('settings.workbuddy.accountFallback', { number: index + 1 });
+    const row = document.createElement('div');
+    row.className = 'managed-account-row';
+    row.classList.toggle('disabled', account.enabled === false);
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'managed-account-checkbox';
+    input.checked = account.enabled !== false;
+    input.disabled = busy;
+    input.setAttribute('aria-label', t('settings.workbuddy.toggleAccount', { account: name }));
+    input.addEventListener('change', () => mutateWorkbuddyAccount(account.id, 'toggle', input.checked));
+    const main = document.createElement('div');
+    main.className = 'managed-account-main';
+    const title = document.createElement('div');
+    title.className = 'managed-account-email';
+    title.textContent = name;
+    title.title = name;
+    const meta = document.createElement('div');
+    meta.className = 'workbuddy-account-meta';
+    meta.textContent = t(account.realm === 'ai' ? 'settings.workbuddy.realmAi' : 'settings.workbuddy.realmCn');
+    main.append(title, meta);
+    const right = document.createElement('span');
+    right.className = 'managed-account-right';
+    const info = document.createElement('span');
+    info.className = 'managed-account-info';
+    // Nicknames, realm labels and email addresses never redirect a quota lookup.
+    const provider = account.accountKey
+      ? providers.find((candidate) => candidate.accountKey === account.accountKey)
+      : null;
+    info.textContent = account.enabled === false ? t('settings.workbuddy.disabled')
+      : provider ? translatedLimitProviderTag(limitProviderPresentationApi.limitProviderStatusLabel(provider))
+        : t('settings.workbuddy.notChecked');
+    info.title = info.textContent;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'managed-account-remove';
+    remove.textContent = '✕';
+    remove.title = t('settings.workbuddy.remove');
+    remove.setAttribute('aria-label', t('settings.workbuddy.removeConfirm', { account: name }));
+    remove.disabled = busy;
+    let armed = false;
+    remove.addEventListener('click', () => {
+      if (busy) return;
+      if (!armed) {
+        armed = true;
+        remove.classList.add('confirming');
+        remove.textContent = '✓';
+        remove.title = t('settings.workbuddy.removeConfirm', { account: name });
+        return;
+      }
+      return mutateWorkbuddyAccount(account.id, 'remove');
+    });
+    right.append(info, remove);
+    row.append(input, main, right);
+    list.append(row);
+  });
+}
+
+function initWorkbuddyAccountSettings() {
+  const api = window.tokenMonitor.workbuddy;
+  const toggle = document.getElementById('workbuddySettingsToggle');
+  if (!api || !toggle) return;
+  toggle.addEventListener('click', () => setAccountGroupExpanded('workbuddy', !state.workbuddyAccountExpanded, 'workbuddyAccountExpanded'));
+  setAccountGroupExpanded('workbuddy', false, 'workbuddyAccountExpanded');
+  renderWorkbuddyStatus();
+  api.onAccounts(applyWorkbuddyAccounts);
+  const revision = state.workbuddyAccountsRevision || 0;
+  api.accounts().then((accounts) => {
+    if ((state.workbuddyAccountsRevision || 0) === revision) applyWorkbuddyAccounts(accounts);
+  }).catch(() => {
+    if ((state.workbuddyAccountsRevision || 0) !== revision) return;
+    state.workbuddyAccountError = workbuddyAccountError('', 'accountsFailed');
+    renderWorkbuddyStatus();
+  });
+  document.getElementById('workbuddyAddCnAccountButton')?.addEventListener('click', () => startWorkbuddyLogin('cn'));
+  document.getElementById('workbuddyAddAiAccountButton')?.addEventListener('click', () => startWorkbuddyLogin('ai'));
+  document.getElementById('workbuddyCancelLoginButton')?.addEventListener('click', cancelWorkbuddyLogin);
 }
 
 function renderAntigravityStatus() {
@@ -17363,6 +17941,8 @@ function setupCursorAccountUI() {
       });
     }
   }
+
+  initWorkbuddyAccountSettings();
 
   const antigravityToggle = document.getElementById('antigravitySettingsToggle');
   if (antigravityToggle && window.tokenMonitor.antigravity) {
