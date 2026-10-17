@@ -193,9 +193,11 @@ function applyParentLink(target, source) {
 }
 
 function stripSessionTextFromPeriod(period, { preserveSessionTitles = false } = {}) {
-  if (!period || typeof period !== 'object' || !period.sessions || typeof period.sessions !== 'object') {
-    return period;
-  }
+  if (!period || typeof period !== 'object') return period;
+  // Scanner coverage is local recovery evidence, not part of the sync wire.
+  const stripped = { ...period };
+  delete stripped.clientModelIds;
+  if (!period.sessions || typeof period.sessions !== 'object') return stripped;
   const sessions = {};
   for (const [key, value] of Object.entries(period.sessions)) {
     if (!value || typeof value !== 'object') {
@@ -203,13 +205,14 @@ function stripSessionTextFromPeriod(period, { preserveSessionTitles = false } = 
       continue;
     }
     const session = { ...value };
+    delete session.canonicalModelIds;
     for (const field of SESSION_TEXT_KEYS) delete session[field];
     if (preserveSessionTitles && typeof value.title === 'string' && value.title) {
       session.title = normalizeSessionTitle(value.title);
     }
     sessions[key] = session;
   }
-  return { ...period, sessions };
+  return { ...stripped, sessions };
 }
 
 // Hub ingress is a trust boundary. Only explicitly permitted canonical titles
@@ -647,7 +650,35 @@ function emptySession(client, id) {
 
 const sessionsWithLiveSource = new WeakSet();
 
+// Identity evidence only. A grouped display row may represent several IDs;
+// none of its counters can be assigned to an individual ID from this list.
+function canonicalModelIds(value, client) {
+  return [...new Set((Array.isArray(value) ? value : [])
+    .filter(model => typeof model === 'string')
+    .map(model => normalizeModelNameForClient(model, client)).filter(Boolean))].sort();
+}
+
+function mergeClientModelIds(target, source) {
+  const clients = new Set([...Object.keys(target.clientModelIds || {}), ...Object.keys(source.clientModelIds || {})]);
+  if (!clients.size) return;
+  target.clientModelIds ||= {};
+  for (const rawClient of clients) {
+    const client = normalizeClientName(rawClient);
+    if (!client) continue;
+    target.clientModelIds[client] = canonicalModelIds([
+      ...(Array.isArray(target.clientModelIds[client]) ? target.clientModelIds[client] : Object.keys(target.clientModels?.[client] || {})),
+      ...(Array.isArray(source.clientModelIds?.[rawClient]) ? source.clientModelIds[rawClient] : Object.keys(source.clientModels?.[rawClient] || {}))
+    ], client);
+  }
+}
+
 function mergeSession(target, source) {
+  if (Array.isArray(target.canonicalModelIds) || Array.isArray(source.canonicalModelIds)) {
+    target.canonicalModelIds = canonicalModelIds([
+      ...(target.canonicalModelIds || Object.keys(target.models || {})),
+      ...(source.canonicalModelIds || Object.keys(source.models || {}))
+    ], target.client);
+  }
   const sourceTokens = Math.max(0, Math.round(asNumber(source.totalTokens)));
   target.totalTokens += sourceTokens;
   target.costUsd += asNumber(source.costUsd);
@@ -774,6 +805,7 @@ function sessionFromRow(row) {
   const id = detectSessionId(row);
   if (!id) return null;
   const session = emptySession(client, id);
+  if (Array.isArray(row.canonicalModelIds)) session.canonicalModelIds = canonicalModelIds(row.canonicalModelIds, client);
   session.totalTokens = Math.max(0, Math.round(tokenValueForClient(row, client)));
   session.costUsd = costValue(row);
   addUnpricedTokens(session, row, session.totalTokens);
@@ -810,6 +842,7 @@ function normalizeSession(input, fallbackKey) {
   const id = normalizeSessionId(input.sessionId || input.session_id || input.session || input.conversationId || input.conversation_id || input.threadId || input.thread_id || fallbackKey);
   if (!client || client === REASONIX_CLIENT || !id) return null;
   const session = emptySession(client, id);
+  if (Array.isArray(input.canonicalModelIds)) session.canonicalModelIds = canonicalModelIds(input.canonicalModelIds, client);
   const components = sessionTokenComponents(input);
   Object.assign(session, components);
   const componentTotal = components.inputTokens + components.outputTokens + components.cacheReadTokens + components.cacheWriteTokens; // reasoning is a subset of output — see TOKEN_COMPONENT_KEYS
@@ -938,6 +971,7 @@ function normalizePeriod(input, options = {}) {
     delete period.modelThroughput;
     return period;
   }
+  mergeClientModelIds(period, input);
   const projectsEnabled = options.projectsEnabled !== false;
   period.totalTokens = Math.max(0, Math.round(asNumber(input.totalTokens ?? input.total_tokens ?? 0)));
   const componentCapability = input.capabilities?.tokenComponents;
@@ -1165,6 +1199,13 @@ function addUsageRowToPeriod(period, row, detectedClient = detectClient(row)) {
   const timedTokens = Math.max(0, Math.round(firstNumber(performance, TIMED_TOKEN_KEYS)));
   const { timedOutputTokens, timedDurationMs } = entryThroughput(row, output, client);
   const model = detectModel(row, client);
+  if (client && (Array.isArray(row.canonicalModelIds) || period.clientModelIds?.[client])) {
+    period.clientModelIds ||= {};
+    period.clientModelIds[client] = canonicalModelIds([
+      ...(period.clientModelIds[client] || Object.keys(period.clientModels[client] || {})),
+      ...(Array.isArray(row.canonicalModelIds) ? row.canonicalModelIds : [model])
+    ], client);
+  }
   period.totalTokens += Math.max(0, Math.round(tokens));
   period.costUsd += cost;
   const unpriced = Math.min(Math.max(0, Math.round(tokens)), Math.max(0, Math.round(asNumber(row.unpricedTokens))));
@@ -1725,6 +1766,7 @@ function aggregateHistory(devices, options = {}) {
 // emptyPeriod()-shaped object). Shared by device aggregation and the WSL merge so
 // the two never diverge on which period fields exist.
 function addPeriodInto(target, source) {
+  mergeClientModelIds(target, source);
   target.capabilities.tokenComponents = target.capabilities.tokenComponents === true
     && source.capabilities?.tokenComponents === true;
   target.capabilities.throughput = target.capabilities.throughput === true
@@ -1930,6 +1972,14 @@ function applyPeriodDelta(base, freshToday, anchorToday) {
 }
 
 function deltaValue(base, fresh, anchor, key) {
+  if (key === 'canonicalModelIds') return [...new Set([...(base || []), ...(fresh || []), ...(anchor || [])])].sort();
+  if (key === 'clientModelIds') {
+    const result = {};
+    for (const client of new Set([...Object.keys(base || {}), ...Object.keys(fresh || {}), ...Object.keys(anchor || {})])) {
+      result[client] = canonicalModelIds([...(base?.[client] || []), ...(fresh?.[client] || []), ...(anchor?.[client] || [])], client);
+    }
+    return result;
+  }
   // Cache observations are snapshots, never additive accounting. Missing
   // metadata retains the base; only an explicit null clears an observation.
   if (key === 'promptCache') return fresh === undefined ? base : normalizePromptCache(fresh);

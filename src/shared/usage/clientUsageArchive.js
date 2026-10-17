@@ -587,11 +587,13 @@ function dailyHistoryCoverage(live, archive, ledgerKeys) {
     const native = client === 'codex' ? nativeCodex : null;
     const tokenModels = native ? native.models : live.clientModels?.[client] || {};
     const costModels = native ? native.modelCosts : live.clientModelCosts?.[client] || {};
-    for (const model of new Set([...Object.keys(tokenModels), ...Object.keys(costModels)])) add(client, model);
+    const identities = !native && live.clientModelIds?.[client];
+    if (Array.isArray(identities) && identities.length === 0) unknown.add(client);
+    for (const model of identities || new Set([...Object.keys(tokenModels), ...Object.keys(costModels)])) add(client, model);
     // archivedPeriod drops aggregate zero keys. Explicit native zero sessions
     // still own that model and must exclude a historical maximum.
     if (native) for (const session of Object.values(native.sessions)) {
-      for (const model of new Set([...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})])) add(client, model);
+      for (const model of session.canonicalModelIds || new Set([...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})])) add(client, model);
     }
     const tokens = Object.values(tokenModels).reduce((sum, n) => sum + numberValue(n), 0);
     const cost = Object.values(costModels).reduce((sum, n) => sum + numberValue(n), 0);
@@ -615,8 +617,9 @@ function dailyHistoryCoverage(live, archive, ledgerKeys) {
     let hasAttribution = names.size > 0;
     for (const session of Object.values(entry.periods || {})) {
       const keys = new Set([...Object.keys(session.models || {}), ...Object.keys(session.modelCosts || {})]);
-      for (const model of keys) names.add(model);
-      hasAttribution ||= keys.size > 0;
+      const identities = session.canonicalModelIds || keys;
+      for (const model of identities) names.add(model);
+      hasAttribution ||= [...identities].length > 0;
       const tokens = Object.values(session.models || {}).reduce((sum, n) => sum + numberValue(n), 0);
       if (numberValue(session.totalTokens) > tokens) unknown.add(client);
     }

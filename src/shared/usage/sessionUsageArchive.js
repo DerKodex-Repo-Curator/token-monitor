@@ -76,15 +76,23 @@ function sessionModelCoverage(entry, session) {
   const models = new Set(Array.isArray(entry.observedModels) ? entry.observedModels : []);
   let unknown = entry.modelHistoryUnknown === true;
   for (const retained of [...Object.values(entry.periods || {}), session].filter(Boolean)) {
+    if (Array.isArray(retained.canonicalModelIds) && retained.canonicalModelIds.length === 0) unknown = true;
     const keys = new Set([...Object.keys(retained.models || {}), ...Object.keys(retained.modelCosts || {})]);
     let tokens = 0;
     let cost = 0;
     for (const raw of keys) {
       const model = normalizeModelNameForClient(raw, retained.client || entry.client);
-      if (!model || model === 'unknown') unknown = true;
-      else models.add(model);
+      if (!Array.isArray(retained.canonicalModelIds)) {
+        if (!model || model === 'unknown') unknown = true;
+        else models.add(model);
+      }
       tokens += Math.max(0, numberValue(retained.models?.[raw]));
       cost += Math.max(0, numberValue(retained.modelCosts?.[raw]));
+    }
+    for (const raw of retained.canonicalModelIds || []) {
+      const model = normalizeModelNameForClient(raw, retained.client || entry.client);
+      if (!model || model === 'unknown') unknown = true;
+      else models.add(model);
     }
     if (numberValue(retained.totalTokens) > tokens
       || numberValue(retained.costUsd) - cost > 4 * Number.EPSILON * Math.max(cost, numberValue(retained.costUsd))) unknown = true;
