@@ -33,11 +33,11 @@ function runRecoveryScenario(root, scenario) {
       const source = fs.readFileSync(path.join(root, 'src/agent/agent.js'), 'utf8');
       const start = source.indexOf('function summaryWithSessionUsageArchive(');
       const body = source.slice(start, source.indexOf('\n}\n', start) + 3);
-      const context = { ...sessionApi, sessionUsageArchiveEnabled: settings.sessionUsageArchiveEnabled !== false,
+      const context = { ...sessionApi, allTimeSince: settings.allTimeSince, sessionUsageArchiveEnabled: settings.sessionUsageArchiveEnabled !== false,
         projectsEnabled: false, dryRun, sessionUsageArchive: undefined, sessionUsageArchiveStore: store, cursorUsageEvents: undefined,
         readSessionUsageArchiveSnapshot: () => readSessionUsageArchiveSnapshot(storeOptions),
         applyDailyHistoryAllTimeFloor: clientApi.applyDailyHistoryAllTimeFloor,
-        loadDailyHistoryFloor: () => historyApi.allTimeCumulativeFromArchive(daily), console: { error() {} } };
+        loadDailyHistoryFloor: allTimeSince => historyApi.allTimeCumulativeFromArchive(daily, { allTimeSince }), console: { error() {} } };
       vm.runInNewContext(body, context);
       if (dryRun) return context.summaryWithSessionUsageArchive(input);
       headless = context.summaryWithSessionUsageArchive;

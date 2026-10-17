@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { normalizeAllTimeSince } = require('./allTimeSince');
 const { applyArchivedClientUsage, applyDailyHistoryAllTimeFloor } = require('./clientUsageArchive');
 const {
   allTimeCumulativeFromArchive,
@@ -18,6 +19,7 @@ const { applyProjectRollups } = require('../usage');
 // Every setting project() and transform() read. A transform running on another
 // thread is handed exactly these (see usageTransformSettings).
 const USAGE_TRANSFORM_SETTING_KEYS = Object.freeze([
+  'allTimeSince',
   'archivedClientUsage',
   'clients',
   'projectsEnabled',
@@ -34,9 +36,9 @@ function usageTransformSettings(settings = {}) {
 
 // Reduces the daily history archive to the per-(client, model) allTime floor
 // (applyDailyHistoryAllTimeFloor's input). The reduction walks every retained
-// day, so it is cached against the archive file's mtime: project() runs on every
-// tick while the archive only changes on a graph tick, and a watch tick must not
-// pay to re-read a year of history it did not touch.
+// day, so it is cached against the file's mtime and inclusive start date.
+// project() runs on every tick while the archive only changes on a graph tick;
+// a watch tick must not pay to re-read a year of history it did not touch.
 //
 // Reading the archive off disk is opt-in: pass `dailyHistoryArchive` (true for
 // the default path, or archive options / a custom loader). A transform built
@@ -48,8 +50,9 @@ function createDailyHistoryFloorReader(options = {}) {
   if (!config) return () => ({});
   const archiveOptions = config === true ? {} : config;
   const read = options.readDailyHistoryArchive || readDailyHistoryArchive;
-  let cache = { mtimeMs: undefined, floor: {} };
-  return function loadDailyHistoryFloor() {
+  let cache = { mtimeMs: undefined, allTimeSince: undefined, floor: {} };
+  return function loadDailyHistoryFloor(allTimeSince) {
+    const since = allTimeSince === undefined ? '' : normalizeAllTimeSince(allTimeSince);
     let mtimeMs;
     try {
       mtimeMs = fs.statSync(dailyHistoryArchivePath(archiveOptions)).mtimeMs;
@@ -59,17 +62,17 @@ function createDailyHistoryFloorReader(options = {}) {
       if (error?.code === 'ENOENT') return {};
       mtimeMs = undefined;
     }
-    if (mtimeMs !== undefined && cache.mtimeMs === mtimeMs) return cache.floor;
+    if (mtimeMs !== undefined && cache.mtimeMs === mtimeMs && cache.allTimeSince === since) return cache.floor;
     let floor;
     try {
-      floor = allTimeCumulativeFromArchive(read(archiveOptions));
+      floor = allTimeCumulativeFromArchive(read(archiveOptions), { allTimeSince: since });
     } catch (_) {
       // A read that fails after the stat succeeded is transient: apply no floor
       // this tick, but do not cache the empty result, so the next call retries
       // even though the file mtime has not changed.
       return {};
     }
-    cache = { mtimeMs, floor };
+    cache = { mtimeMs, allTimeSince: since, floor };
     return floor;
   };
 }
@@ -158,7 +161,7 @@ function createUsageTransform(options = {}) {
         canonicalSummary: true,
         mutate: true
       });
-      visibleSummary = applyDailyHistoryAllTimeFloor(withSessions, loadDailyHistoryFloor(), { sessionArchive: archive });
+      visibleSummary = applyDailyHistoryAllTimeFloor(withSessions, loadDailyHistoryFloor(settings.allTimeSince), { sessionArchive: archive });
     }
     delete visibleSummary.sessionUsageArchiveFullScan;
     return settings.projectsEnabled === false ? visibleSummary : applyProjectRollups(visibleSummary);

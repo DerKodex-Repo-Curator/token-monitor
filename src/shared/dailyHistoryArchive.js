@@ -808,10 +808,11 @@ function emptyCumulativeUsage() {
   };
 }
 
-function allTimeCumulativeFromArchive(archive) {
+function allTimeCumulativeFromArchive(archive, { allTimeSince = '' } = {}) {
   const normalized = normalizeDailyHistoryArchive(archive);
   const cumulative = Object.create(null);
   for (const day of reconciledArchiveDays([], normalized, {}, true).values()) {
+    if (day.date < allTimeSince) continue;
     for (const [observation, split] of selectedDayComponents(day)) {
       const mergedEra = isPreSplitEntry(observation.clientIdentityGeneration === undefined ? day : observation);
       let client = normalizeClientName(observation.client);

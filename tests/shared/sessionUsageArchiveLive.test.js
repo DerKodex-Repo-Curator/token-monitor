@@ -152,7 +152,7 @@ test('headless projection consumes the full-scan hint without publishing it', t 
       const { store } = setup(t);
       const archive = captureSessionUsageArchive({}, summary(100), AT);
       store.capture(summary(100), AT);
-      const context = { sessionUsageArchiveEnabled, dryRun, projectsEnabled: false,
+      const context = { allTimeSince: undefined, sessionUsageArchiveEnabled, dryRun, projectsEnabled: false,
         sessionUsageArchive: archive, sessionUsageArchiveStore: store, cursorUsageEvents: undefined,
         sessionUsageArchiveDate, updateSessionUsageArchive, applySessionUsageArchive,
         applyDailyHistoryAllTimeFloor, loadDailyHistoryFloor: () => ({}),
@@ -180,7 +180,7 @@ test('headless capture failure preserves committed usage and publication until r
   const source = fs.readFileSync(path.resolve(__dirname, '../../src/agent/agent.js'), 'utf8');
   const start = source.indexOf('function summaryWithSessionUsageArchive(');
   const body = source.slice(start, source.indexOf('\n}\n', start) + 3);
-  const context = { sessionUsageArchiveEnabled: true, dryRun: false, projectsEnabled: false,
+  const context = { allTimeSince: undefined, sessionUsageArchiveEnabled: true, dryRun: false, projectsEnabled: false,
     sessionUsageArchiveStore: store, sessionUsageArchiveDate, applySessionUsageArchive,
     applyDailyHistoryAllTimeFloor, loadDailyHistoryFloor: () => ({}),
     console: { error() {} } };
