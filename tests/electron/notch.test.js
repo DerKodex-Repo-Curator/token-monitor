@@ -489,6 +489,29 @@ test('reversing the shell starts at the current shape without a jump or window f
   assert.equal(primary.opacity, 1);
 });
 
+test('attached Liquid Glass forwards the camera shade on every material frame and removes it on a capsule', (t) => {
+  const material = [];
+  const f = fixture(t, { notchStyle: 'liquid-glass-clear' }, { reducedMotion: false,
+    nativeGlass: () => true, liquidGlass: () => ({ dark: true }),
+    createGlass: () => ({ hardwareShade: true, update: value => material.push(value), dispose() {} }) });
+  const win = f.windows[0], head = last(win).geometry;
+  f.screen.point = { x: win.bounds.x + head.headerX + 20, y: 10 };
+  f.controller.poll(100); f.controller.poll(240);
+  const animation = win.messages.filter(message => message.channel === 'topNotch:animate').at(-1).payload;
+  for (const elapsed of [80, 160, 240, animation.duration]) {
+    f.ipcMain.emit('topNotch:frame', { sender: win.webContents }, { id: animation.id, elapsed });
+    const payload = last(win), frame = win.messages.filter(message => message.channel === 'topNotch:motion').at(-1).payload;
+    const native = material.filter(value => value.shape).at(-1);
+    assert.equal(payload.nativeHardwareShade, true);
+    assert.equal(native.hardwareShade.progress, frame.progress);
+    assert.deepEqual(native.hardwareShade, { ...require('../../src/electron/renderer/notch/renderer').notchGlassGeometry(payload.geometry.height, frame.bodyHeight), progress: frame.progress });
+    assert.equal(require('../../src/electron/renderer/edgeDock/shapes').toSvgPath(native.shape.commands), frame.shape.d);
+    assert.equal(native.tintOpacity, 0, 'the native cap is the only attached tint');
+  }
+  f.preferences.notchShape = 'pill'; f.controller.sync();
+  assert.equal(material.filter(value => value.shape).at(-1).hardwareShade, undefined);
+});
+
 // Exercise the production renderer's coordinate conversion: CSS zoom also
 // scales translateX, while AppKit/shape coordinates are physical DIPs.
 test('header outer margins stay equal through motion at each summary zoom', () => {

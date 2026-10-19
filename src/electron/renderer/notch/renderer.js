@@ -546,6 +546,7 @@
       paintRefreshButton();
       root.classList.toggle('is-notch-open', payload.expanded === true);
       root.classList.toggle('is-notch-attached', payload.geometry.notched === true);
+      root.classList.toggle('has-native-hardware-shade', payload.nativeHardwareShade === true);
       root.style.setProperty('--notch-zoom', Number(payload.appearance.zoomFactor) || 1);
       const headerActivity = (payload.summary?.items || []).map((item) => item.providerCell ? [
         runningSessionSummary(item.providerCell.sessions).count,

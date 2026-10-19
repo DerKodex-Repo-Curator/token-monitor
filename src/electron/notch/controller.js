@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { NOTCH_METRICS, notchPeekBounds, notchCanvasBounds, notchGeometry, notchBounds, notchSummaryMaxWidth, notchCommands, translateCommands, interpolateCommands, rectContains } = require('./geometry');
 const { toSvgPath } = require('../renderer/edgeDock/shapes');
+const { notchGlassGeometry } = require('../renderer/notch/renderer');
 const { readMacNotchScreens } = require('./screen');
 const { notchBlurBounds } = require('./blur');
 const { readMacMenuWindows } = require('./menuBar');
@@ -251,14 +252,14 @@ function createNotchController({ BrowserWindow, ipcMain, screen, getSettings,
       tintOpacity: attached ? 0 : liquidGlassTint(settings(), mode) };
   }
 
-  function shape(surface, points, bounds, display) {
+  function shape(surface, points, bounds, display, hardwareShade) {
     const d = toSvgPath(points);
-    const key = `${display.id}:${display.scaleFactor}:${d}`;
+    const key = `${display.id}:${display.scaleFactor}:${d}:${JSON.stringify(hardwareShade ?? null)}`;
     if (shapes[surface]?.key === key && shapes[surface]?.width === bounds.width && shapes[surface]?.height === bounds.height) return;
     shapes[surface] = { key, width: bounds.width, height: bounds.height, d };
     const win = windows[surface];
     try {
-      if (glass[surface]) glass[surface].update({ ...glassOptions(surface), shape: { commands: points, width: bounds.width, height: bounds.height } });
+      if (glass[surface]) glass[surface].update({ ...glassOptions(surface), shape: { commands: points, width: bounds.width, height: bounds.height }, hardwareShade });
       else if (nativeMaterial[surface] && applyShapeMask?.(win, points, bounds.width, bounds.height, display) !== true) {
         nativeMaterial[surface] = false;
         win.setVibrancy(null);
@@ -281,6 +282,7 @@ function createNotchController({ BrowserWindow, ipcMain, screen, getSettings,
     if (!hasSummary) summaryMeasurement = null;
     else if (!summaryMeasured && summaryMeasurement?.key !== measurementKey) summaryMeasurement = { id: ++summaryGeneration, key: measurementKey, measuring: true };
     const payload = { ...base, expanded, visible: expanded, quietFullScreen: fullScreen, motion: frame,
+      nativeHardwareShade: glass.notch?.hardwareShade === true,
       geometry: { ...current.geometry, summaryBudget: current.summaryBudget, headerX: current.closed.x - (viewport || current.canvas).x, headerWidth: current.closed.width,
         flare: current.geometry.notched ? NOTCH_METRICS.openFlare : 0,
         gapOffset: current.geometry.centerX - current.geometry.gapWidth / 2 - current.closed.x,
@@ -332,7 +334,11 @@ function createNotchController({ BrowserWindow, ipcMain, screen, getSettings,
     frame = { shape: null, progress, contentScale, bodyHeight: Math.max(0, height - headerHeight), headerHeight,
       summaryHeight: current.geometry.height, summaryIconInset: current.summaryIconInset,
       summaryEdges: summaryEdges(current), bodyBox: { x: current.open.x - canvas.x, width: current.open.width }, ...extra };
-    shape('notch', points, canvas, current.display);
+    // The camera cap must share the native material's compositor transaction.
+    // An SVG cap arrives later through Chromium, leaving a moving glass fringe.
+    const hardwareShade = current.geometry.notched && glass.notch?.hardwareShade === true
+      ? { ...notchGlassGeometry(current.geometry.height, frame.bodyHeight), progress: value } : undefined;
+    shape('notch', points, canvas, current.display, hardwareShade);
     frame.shape = shapes.notch;
     paintBlur(current, value);
     if (alive(windows.notch) && ready.notch) windows.notch.webContents.send('topNotch:motion', frame);

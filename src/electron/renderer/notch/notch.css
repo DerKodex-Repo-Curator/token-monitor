@@ -9,6 +9,9 @@ html.notch-black .edge-dock-shape-line { stroke: transparent; }
 .notch-hardware-shade, .notch-glass-rim { display: none; pointer-events: none; }
 html:not(.notch-black) .is-notch-attached .notch-hardware-shade,
 html:not(.notch-black) .is-notch-attached .notch-glass-rim { display: inline; }
+/* Native glass paints its camera cap in the material transaction. Keep the SVG
+   fallback for vibrancy; drawing both would darken the panel twice. */
+html:not(.notch-black) .is-notch-attached.has-native-hardware-shade :is(.notch-hardware-shade, .notch-glass-rim) { display: none; }
 .notch-hardware-stop-0 { stop-opacity: 1; }
 .notch-hardware-stop-1 { stop-opacity: calc(1 - var(--notch-content-progress, 0) * .36); }
 .notch-hardware-stop-2 { stop-opacity: calc(1 - var(--notch-content-progress, 0) * .68); }
