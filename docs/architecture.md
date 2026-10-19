@@ -116,6 +116,8 @@ The experimental macOS Notch owns its fixed pages under `renderer/notch/` and sh
 
 Liquid Glass owns the attached camera scrim as a native gradient masked by the same path, updated with the material in one transaction without implicit animation. Painting that scrim in Chromium makes it trail the native outline during expansion. The renderer keeps the shared gradient proportions and supplies the SVG fallback for vibrancy; it hides its shade and rim when the native bridge owns the scrim. Keep Electron's content hierarchy intact: the native shade belongs to the glass view's layer, below Chromium text, and must disappear on camera-free capsules.
 
+Hover growth moves and scales each summary ear from its outer edge while the camera gap remains fixed. The shell, corner radii, summary height and content scale share the same spring frame, including reversal and opening from a partially grown entry. CSS transforms must not alter the measured summary widths or trigger new width reports during hover.
+
 The seven-day chart takes its newest bar from live Today accounting and past days from History (`notch/history.js`). A missing day stays unknown, and reads as zero only when the transport is available and every joined device answered for its History. The answer is dropped when the backend generation, local date or History enablement changes; a new revision keeps the previous answer until the reload lands, and remote reloads are throttled to one a minute.
 
 ## Widget mode switching

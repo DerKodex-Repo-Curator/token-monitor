@@ -44,6 +44,8 @@ html.notch-black .edge-dock-root[data-surface="notch"] .edge-dock-shape {
 .notch-left { justify-content: flex-start; padding-left: calc(var(--notch-shoulder, 0px) + 8px); box-sizing: border-box; }
 .notch-right { justify-content: flex-end; padding-right: calc(var(--notch-shoulder, 0px) + 8px); box-sizing: border-box; }
 .notch-slot-content { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; width: max-content; zoom: var(--notch-summary-zoom, 1); }
+.notch-left .notch-slot-content { transform-origin: left center; }
+.notch-right .notch-slot-content { transform-origin: right center; }
 .notch-summary-field { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .notch-gap { flex: 0 0 auto; }
 .notch-summary .edge-dock-mark { flex-shrink: 0; width: 17px; height: 17px; }
